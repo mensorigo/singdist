@@ -24,7 +24,9 @@ function formatDate(unix: number): string {
 }
 
 function sourceLabel(source: string): string {
-  return source === "bootstrap" ? "启动导入" : "上传";
+  if (source === "bootstrap") return "启动导入";
+  if (source === "selfsigned") return "自签名生成";
+  return "上传";
 }
 
 function DaysBadge({
@@ -321,6 +323,8 @@ export default function CertificatesPage({
       </section>
 
       <UploadCard onUploaded={refresh} />
+
+      <GenerateCard onGenerated={refresh} />
     </div>
   );
 }
@@ -406,6 +410,112 @@ function PemField({
         }}
       />
     </div>
+  );
+}
+
+// Generate a self-signed certificate in place: the names are the
+// addresses the panel will be visited by (domain or IP) — clients check
+// them against the address they connected to.
+function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void> }) {
+  const [namesText, setNamesText] = useState("");
+  const [days, setDays] = useState("365");
+  const [note, setNote] = useState("");
+  const [activate, setActivate] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setFormError(null);
+    setFormSuccess(null);
+    const names = namesText
+      .split(/[\s,，]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (names.length === 0) {
+      setFormError("请至少填写一个域名或 IP");
+      return;
+    }
+    const daysNum = Number.parseInt(days, 10);
+    if (!Number.isFinite(daysNum) || daysNum < 1 || daysNum > 3650) {
+      setFormError("有效期天数需在 1 到 3650 之间");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await api.certs.selfSigned(names, daysNum, note.trim(), activate);
+      setNamesText("");
+      setNote("");
+      setActivate(false);
+      setFormSuccess(activate ? "自签名证书已生成并启用" : "自签名证书已生成并保存");
+      await onGenerated();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : "生成失败，请重试");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+      <p className="text-base font-semibold">生成自签名证书</p>
+      <p className="mt-1 text-[13px] text-muted-foreground">
+        名字填你将来访问面板时用的域名或 IP（客户端会核对它与地址是否一致），
+        多个用逗号或空格分隔。无需向任何机构申请，但浏览器不会自动信任自签名证书。
+      </p>
+      <form onSubmit={handleSubmit} className="mt-4 space-y-4">
+        <div className="grid gap-4 md:grid-cols-[1fr_160px]">
+          <div className="space-y-2">
+            <Label htmlFor="ss-names">域名或 IP</Label>
+            <Input
+              id="ss-names"
+              value={namesText}
+              onChange={(e) => setNamesText(e.target.value)}
+              placeholder="例如：panel.example.com 或 192.168.1.10"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="ss-days">有效期（天）</Label>
+            <Input
+              id="ss-days"
+              type="number"
+              min={1}
+              max={3650}
+              value={days}
+              onChange={(e) => setDays(e.target.value)}
+            />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="ss-note">备注（可选）</Label>
+          <Input
+            id="ss-note"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="例如：内网测试用"
+          />
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={activate}
+            onChange={(e) => setActivate(e.target.checked)}
+            className="h-4 w-4 rounded border accent-primary"
+          />
+          生成并立即启用
+        </label>
+        {formError && <p className="text-[13px] text-destructive">{formError}</p>}
+        {formSuccess && (
+          <p className="text-[13px] text-emerald-600 dark:text-emerald-400">
+            {formSuccess}
+          </p>
+        )}
+        <Button type="submit" disabled={submitting}>
+          {submitting ? "生成中…" : "生成证书"}
+        </Button>
+      </form>
+    </section>
   );
 }
 

@@ -65,11 +65,6 @@ export interface CertInfo {
   expired: boolean;
 }
 
-export interface CertList {
-  active: CertInfo | null;
-  versions: CertInfo[];
-}
-
 export type TrendGranularity = "minute" | "hour" | "day";
 
 export interface TrendPoint {
@@ -110,6 +105,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+export interface CertList {
+  active: CertInfo | null;
+  versions: CertInfo[];
+}
+
 export const api = {
   status: () => request<AuthStatus>("/api/auth/status"),
   login: (username: string, password: string) =>
@@ -128,6 +128,16 @@ export const api = {
       request<CertInfo>("/api/certs", {
         method: "POST",
         body: JSON.stringify({ certPem, keyPem, note, activate }),
+      }),
+    selfSigned: (
+      names: string[],
+      days: number,
+      note: string,
+      activate: boolean,
+    ) =>
+      request<CertInfo>("/api/certs/selfsigned", {
+        method: "POST",
+        body: JSON.stringify({ names, days, note, activate }),
       }),
     activate: (id: string) =>
       request<CertInfo>(`/api/certs/${encodeURIComponent(id)}/activate`, {

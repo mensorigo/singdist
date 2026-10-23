@@ -21,6 +21,7 @@ func NewHandler(mgr *Manager) *Handler { return &Handler{mgr: mgr} }
 func (h *Handler) RegisterProtected(rg *gin.RouterGroup) {
 	rg.GET("/certs", h.list)
 	rg.POST("/certs", h.upload)
+	rg.POST("/certs/selfsigned", h.selfSigned)
 	rg.POST("/certs/:id/activate", h.activate)
 	rg.DELETE("/certs/:id", h.remove)
 }
@@ -57,6 +58,27 @@ func (h *Handler) upload(c *gin.Context) {
 		return
 	}
 	info, err := h.mgr.Add([]byte(req.CertPem), []byte(req.KeyPem), req.Note, req.Activate)
+	if err != nil {
+		failErr(c, err)
+		return
+	}
+	c.JSON(http.StatusCreated, info)
+}
+
+type selfSignedRequest struct {
+	Names    []string `json:"names"`
+	Days     int      `json:"days"`
+	Note     string   `json:"note"`
+	Activate bool     `json:"activate"`
+}
+
+func (h *Handler) selfSigned(c *gin.Context) {
+	var req selfSignedRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with names")
+		return
+	}
+	info, err := h.mgr.GenerateSelfSigned(req.Names, req.Days, req.Note, req.Activate)
 	if err != nil {
 		failErr(c, err)
 		return
