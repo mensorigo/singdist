@@ -10,15 +10,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"math/big"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
 // CookieName is the session cookie set by the login handler and read by the
 // auth guard middleware (wired in main via httpx).
-const CookieName = "subdist_session"
+const CookieName = "singbox-ui_session"
 
 // SessionTTL is the lifetime of a login session.
 const SessionTTL = 7 * 24 * time.Hour
@@ -29,7 +31,7 @@ const (
 	passwordLen    = 16
 	maxFailures    = 5
 	lockoutWindow  = 5 * time.Minute
-	defaultAdmin   = "root"
+	defaultAdmin   = "singbox-ui"
 	passwordRunes  = "abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789" // unambiguous: no 0/O/1/l/I/o
 	sessionHashLen = sha256.Size
 )
@@ -39,7 +41,9 @@ var (
 	ErrRateLimited        = errors.New("auth: too many failed login attempts")
 	ErrInvalidSession     = errors.New("auth: invalid session")
 	ErrWrongPassword      = errors.New("auth: current password incorrect")
-	ErrNotImplemented     = errors.New("auth: not implemented")
+	ErrInvalidUsername    = errors.New("auth: invalid username")
+	ErrUsernameTaken      = errors.New("auth: username already taken")
+	ErrInvalidPassword    = errors.New("auth: invalid password")
 )
 
 // Repository is the persistence seam auth needs from the store layer.
@@ -49,9 +53,11 @@ type Repository interface {
 	AdminCredentials(ctx context.Context, username string) (id int64, passwordHash string, ok bool, err error)
 	AdminUsername(ctx context.Context, id int64) (string, bool, error)
 	UpdateAdminPassword(ctx context.Context, id int64, passwordHash string, now int64) error
+	UpdateAdminUsername(ctx context.Context, id int64, username string, now int64) error
 	CreateSession(ctx context.Context, tokenHash string, adminID, expiresAt, now int64) error
 	SessionAdmin(ctx context.Context, tokenHash string) (adminID int64, expiresAt int64, ok bool, err error)
 	DeleteSession(ctx context.Context, tokenHash string) error
+	DeleteOtherSessions(ctx context.Context, adminID int64, exceptTokenHash string) (int64, error)
 	DeleteExpiredSessions(ctx context.Context, now int64) error
 }
 
@@ -164,8 +170,9 @@ func (s *Service) Logout(ctx context.Context, token string) error {
 	return s.repo.DeleteSession(ctx, hashToken(token))
 }
 
-// ChangePassword verifies the current password and replaces it.
-func (s *Service) ChangePassword(ctx context.Context, adminID int64, current, next string) error {
+// checkPassword verifies a password for an admin id, without leaking
+// whether the admin exists.
+func (s *Service) checkPassword(ctx context.Context, adminID int64, password string) error {
 	username, ok, err := s.repo.AdminUsername(ctx, adminID)
 	if err != nil {
 		return err
@@ -177,8 +184,16 @@ func (s *Service) ChangePassword(ctx context.Context, adminID int64, current, ne
 	if err != nil {
 		return err
 	}
-	if !ok || bcrypt.CompareHashAndPassword([]byte(hash), []byte(current)) != nil {
+	if !ok || bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return ErrWrongPassword
+	}
+	return nil
+}
+
+// ChangePassword verifies the current password and replaces it.
+func (s *Service) ChangePassword(ctx context.Context, adminID int64, current, next string) error {
+	if err := s.checkPassword(ctx, adminID, current); err != nil {
+		return err
 	}
 	newHash, err := bcrypt.GenerateFromPassword([]byte(next), bcryptCost)
 	if err != nil {
@@ -187,12 +202,82 @@ func (s *Service) ChangePassword(ctx context.Context, adminID int64, current, ne
 	return s.repo.UpdateAdminPassword(ctx, adminID, string(newHash), time.Now().Unix())
 }
 
-// ChangeUsername is reserved for a later milestone: the admin model and the
-// settings UI already anticipate renames, but milestone 1 keeps the single
-// bootstrap username `root`.
-// TODO(milestone-2): add Repository.UpdateAdminUsername + handler wiring.
-func (s *Service) ChangeUsername(_ context.Context, _ int64, _ string) error {
-	return ErrNotImplemented
+// ChangeUsername renames an admin. The current password must be supplied
+// as proof of identity, and the new name must be unused. Sessions are
+// bound to the admin id, so a rename keeps every live session valid —
+// including the one making the request.
+func (s *Service) ChangeUsername(ctx context.Context, adminID int64, currentPassword, newUsername string) (string, error) {
+	if err := s.checkPassword(ctx, adminID, currentPassword); err != nil {
+		return "", err
+	}
+	username := strings.TrimSpace(newUsername)
+	if len(username) < 1 || len(username) > 64 || strings.ContainsFunc(username, unicode.IsSpace) {
+		return "", ErrInvalidUsername
+	}
+	if id, _, ok, err := s.repo.AdminCredentials(ctx, username); err != nil {
+		return "", err
+	} else if ok && id != adminID {
+		return "", ErrUsernameTaken
+	}
+	if err := s.repo.UpdateAdminUsername(ctx, adminID, username, time.Now().Unix()); err != nil {
+		return "", err
+	}
+	return username, nil
+}
+
+// ChangeAccount applies a username and/or password change in one step,
+// verified by a single current-password check. A nil newUsername or a
+// nil/empty newPassword leaves that field untouched, so the form can
+// submit either change alone or both together. It returns the admin's
+// username after the change. A password change here is a security event
+// exactly like ChangePassword; the caller revokes other sessions.
+func (s *Service) ChangeAccount(ctx context.Context, adminID int64, currentPassword string, newUsername, newPassword *string) (string, error) {
+	if err := s.checkPassword(ctx, adminID, currentPassword); err != nil {
+		return "", err
+	}
+	username, ok, err := s.repo.AdminUsername(ctx, adminID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", ErrInvalidSession
+	}
+	if newUsername != nil {
+		name := strings.TrimSpace(*newUsername)
+		if len(name) < 1 || len(name) > 64 || strings.ContainsFunc(name, unicode.IsSpace) {
+			return "", ErrInvalidUsername
+		}
+		if name != username {
+			if id, _, ok, err := s.repo.AdminCredentials(ctx, name); err != nil {
+				return "", err
+			} else if ok && id != adminID {
+				return "", ErrUsernameTaken
+			}
+			if err := s.repo.UpdateAdminUsername(ctx, adminID, name, time.Now().Unix()); err != nil {
+				return "", err
+			}
+			username = name
+		}
+	}
+	if newPassword != nil && *newPassword != "" {
+		if len(*newPassword) < 8 || len(*newPassword) > 72 {
+			return "", ErrInvalidPassword
+		}
+		newHash, err := bcrypt.GenerateFromPassword([]byte(*newPassword), bcryptCost)
+		if err != nil {
+			return "", err
+		}
+		if err := s.repo.UpdateAdminPassword(ctx, adminID, string(newHash), time.Now().Unix()); err != nil {
+			return "", err
+		}
+	}
+	return username, nil
+}
+
+// RevokeOtherSessions signs out every session of an admin except the
+// given one, and returns how many were removed.
+func (s *Service) RevokeOtherSessions(ctx context.Context, adminID int64, exceptTokenHash string) (int64, error) {
+	return s.repo.DeleteOtherSessions(ctx, adminID, exceptTokenHash)
 }
 
 // PruneSessions drops expired sessions; call periodically from main.

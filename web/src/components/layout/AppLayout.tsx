@@ -1,9 +1,11 @@
 import {
   ChevronsLeft,
   LayoutGrid,
+  Lock,
   LogOut,
   Moon,
   RefreshCw,
+  ScrollText,
   Server,
   Settings as SettingsIcon,
   Share2,
@@ -13,6 +15,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
+import SyncControl from "@/components/sync-control";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Theme } from "@/lib/theme";
@@ -22,14 +25,18 @@ export type RouteKey =
   | "subscriptions"
   | "inbounds"
   | "certificates"
-  | "settings";
+  | "settings"
+  | "security"
+  | "logs"
 
 export const ROUTES: { key: RouteKey; path: string; label: string }[] = [
   { key: "dashboard", path: "/dashboard", label: "仪表盘" },
   { key: "subscriptions", path: "/subscriptions", label: "订阅管理" },
   { key: "inbounds", path: "/inbounds", label: "入站" },
   { key: "certificates", path: "/certificates", label: "证书管理" },
+  { key: "security", path: "/security", label: "安全和隐私" },
   { key: "settings", path: "/settings", label: "设置" },
+  { key: "logs", path: "/logs", label: "日志" },
 ];
 
 const NAV_ICONS: Record<RouteKey, ReactNode> = {
@@ -38,9 +45,11 @@ const NAV_ICONS: Record<RouteKey, ReactNode> = {
   inbounds: <Server className="h-[18px] w-[18px] shrink-0" />,
   certificates: <ShieldCheck className="h-[18px] w-[18px] shrink-0" />,
   settings: <SettingsIcon className="h-[18px] w-[18px] shrink-0" />,
+  security: <Lock className="h-[18px] w-[18px] shrink-0" />,
+  logs: <ScrollText className="h-[18px] w-[18px] shrink-0" />,
 };
 
-const SIDEBAR_STORAGE_KEY = "subdist-sidebar-collapsed";
+const SIDEBAR_STORAGE_KEY = "singbox-ui-sidebar-collapsed";
 
 function initialCollapsed(): boolean {
   try {
@@ -61,6 +70,9 @@ interface Props {
   onToggleTheme: () => void;
   onLogout: () => void;
   onRefresh: () => void;
+  syncRefreshSignal: number;
+  onSynced: () => void;
+  textSelectable: boolean;
   children: ReactNode;
 }
 
@@ -72,6 +84,9 @@ export default function AppLayout({
   onToggleTheme,
   onLogout,
   onRefresh,
+  syncRefreshSignal,
+  onSynced,
+  textSelectable,
   children,
 }: Props) {
   const [collapsed, setCollapsed] = useState<boolean>(initialCollapsed);
@@ -137,7 +152,7 @@ export default function AppLayout({
         </button>
         <div className={brandLabelCls}>
           <p className="truncate text-[19px] font-semibold leading-tight tracking-tight">
-            SingDist
+            singbox-ui
           </p>
         </div>
         {/* Collapse chevron: kept for the expanded state only (fades out and
@@ -229,7 +244,12 @@ export default function AppLayout({
   );
 
   return (
-    <div className="flex min-h-svh bg-zinc-50 dark:bg-background">
+    <div
+      className={cn(
+        "flex min-h-svh bg-zinc-50 dark:bg-background",
+        !textSelectable && "select-none",
+      )}
+    >
       {/* Sidebar: md and up, collapsible to an icon rail */}
       <aside
         className={cn(
@@ -249,10 +269,14 @@ export default function AppLayout({
             </span>
 
             <div className="ml-auto flex items-center gap-1.5">
+              <SyncControl
+                refreshSignal={syncRefreshSignal}
+                onSynced={onSynced}
+              />
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-11 w-11 [&_svg]:size-6"
+                className="h-10 w-10 [&_svg]:size-5"
                 onClick={handleRefresh}
                 title="刷新"
                 aria-label="刷新"
@@ -266,7 +290,7 @@ export default function AppLayout({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-11 w-11 [&_svg]:size-6"
+                className="h-10 w-10 [&_svg]:size-5"
                 onClick={onToggleTheme}
                 title={theme === "dark" ? "切换到浅色" : "切换到暗色"}
                 aria-label="切换主题"
@@ -281,7 +305,7 @@ export default function AppLayout({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-11 w-11 [&_svg]:size-6 md:hidden"
+                className="h-10 w-10 [&_svg]:size-5 md:hidden"
                 onClick={onLogout}
                 title="退出登录"
                 aria-label="退出登录"

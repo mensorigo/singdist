@@ -11,10 +11,12 @@ import (
 	"log/slog"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	"subdist/server/internal/core"
+	"singbox-ui/server/internal/core"
 )
 
 const (
@@ -27,6 +29,11 @@ const (
 
 	seedKeyUp   = "traffic_seed_up"
 	seedKeyDown = "traffic_seed_down"
+
+	// timezoneSettingKey mirrors settings.keyTimezone; the sampler
+	// re-reads it on every tick so a settings change applies without
+	// a panel restart.
+	timezoneSettingKey = "timezone"
 )
 
 // Repository is the persistence seam dash needs from the store layer.
@@ -79,10 +86,12 @@ type Summary struct {
 	UploadTotal   int64       `json:"uploadTotal"`
 	DownloadTotal int64       `json:"downloadTotal"`
 	ActiveConns   int         `json:"activeConns"`
+	DistinctIPs   int         `json:"distinctIPs"`
 	Series        []Sample    `json:"series"`
 	System        SystemInfo  `json:"system"`
 	Traffic       TrafficInfo `json:"traffic"`
 	PanelUptimeS  int64       `json:"panelUptimeSecs"`
+	Timezone      string      `json:"timezone"`
 }
 
 // TrendPoint is one aggregated bucket of the traffic trend series.
@@ -98,8 +107,9 @@ type Trend struct {
 	Points      []TrendPoint `json:"points"`
 }
 
-// panelLocation is the timezone daily traffic is accounted in, matching
-// the old panel's default display timezone.
+// panelLocation is the default panel timezone, matching the old
+// panel's display timezone. The live value comes from the timezone
+// setting; this is only the fallback when none is stored.
 func panelLocation() *time.Location {
 	loc, err := time.LoadLocation("Asia/Shanghai")
 	if err != nil {
@@ -113,7 +123,7 @@ type Sampler struct {
 	client core.CoreClient
 	repo   Repository
 	log    *slog.Logger
-	loc    *time.Location
+	loc    atomic.Pointer[time.Location]
 
 	startedAt time.Time
 
@@ -126,6 +136,7 @@ type Sampler struct {
 	upTotal     int64
 	downTotal   int64
 	conns       int
+	distinctIPs int
 	series      []Sample
 	seedUp      int64
 	seedDown    int64
@@ -145,16 +156,27 @@ type Sampler struct {
 // history through repo (repo may be nil, disabling history).
 func NewSampler(client core.CoreClient, repo Repository, log *slog.Logger) *Sampler {
 	hostname, _ := os.Hostname()
-	return &Sampler{
+	s := &Sampler{
 		client:    client,
 		repo:      repo,
 		log:       log,
-		loc:       panelLocation(),
 		startedAt: time.Now(),
 		series:    make([]Sample, 0, ringSize),
 		cpuReader: newCPUReader(),
 		hostname:  hostname,
 	}
+	s.loc.Store(panelLocation())
+	return s
+}
+
+// currentLoc returns the panel timezone: the stored setting when it
+// parses, the default otherwise. The tick loop refreshes it from the
+// setting every 2s, so a settings change applies without restart.
+func (s *Sampler) currentLoc() *time.Location {
+	if loc := s.loc.Load(); loc != nil {
+		return loc
+	}
+	return panelLocation()
 }
 
 // Start runs the sampling loop until ctx is cancelled.
@@ -173,6 +195,19 @@ func (s *Sampler) Start(ctx context.Context) {
 }
 
 func (s *Sampler) tick(ctx context.Context) {
+	// Refresh the panel timezone from settings on every tick, ahead
+	// of the core call: a settings change must apply without restart
+	// even while the core is unreachable (the persistence section
+	// below early-returns in that case).
+	if s.repo != nil {
+		locCtx, locCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if v, ok, err := s.repo.GetSetting(locCtx, timezoneSettingKey); err == nil && ok {
+			if loc, lerr := time.LoadLocation(strings.TrimSpace(v)); lerr == nil {
+				s.loc.Store(loc)
+			}
+		}
+		locCancel()
+	}
 	callCtx, cancel := context.WithTimeout(ctx, 1500*time.Millisecond)
 	totals, err := s.client.Totals(callCtx)
 	cancel()
@@ -187,6 +222,9 @@ func (s *Sampler) tick(ctx context.Context) {
 		s.online = false
 		s.coreUptime = 0
 		s.upRate, s.downRate = 0, 0
+		// Core unreachable: no connections are observable through it,
+		// so both connection figures reset instead of going stale.
+		s.conns, s.distinctIPs = 0, 0
 		s.pushLocked(Sample{Ts: now.Unix(), Up: 0, Down: 0})
 		s.mu.Unlock()
 		return
@@ -204,6 +242,7 @@ func (s *Sampler) tick(ctx context.Context) {
 	s.online = true
 	s.coreUptime = coreUptimeSecs()
 	s.upTotal, s.downTotal, s.conns = totals.UploadTotal, totals.DownloadTotal, totals.ActiveConns
+	s.distinctIPs = totals.DistinctIPs
 
 	var upDelta, downDelta int64
 	var upRate, downRate float64
@@ -310,8 +349,9 @@ func (s *Sampler) trafficInfo() TrafficInfo {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	now := time.Now().In(s.loc)
-	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, s.loc)
+	loc := s.currentLoc()
+	now := time.Now().In(loc)
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	todayUp, todayDown, err := s.repo.TrafficSum(ctx, midnight.Unix())
 	if err != nil {
 		s.log.Warn("dash: traffic sum (today)", "err", err)
@@ -347,6 +387,7 @@ func (s *Sampler) Summary() Summary {
 		UploadTotal:   s.upTotal,
 		DownloadTotal: s.downTotal,
 		ActiveConns:   s.conns,
+		DistinctIPs:   s.distinctIPs,
 		Series:        series,
 		PanelUptimeS:  int64(time.Since(s.startedAt).Seconds()),
 	}
@@ -368,6 +409,7 @@ func (s *Sampler) Summary() Summary {
 		NetTxBytes:    netTx,
 	}
 	sum.Traffic = s.trafficInfo()
+	sum.Timezone = s.currentLoc().String()
 	return sum
 }
 
@@ -424,8 +466,9 @@ func (s *Sampler) bucketStart(t time.Time, granularity string) int64 {
 	case "hour":
 		return t.Truncate(time.Hour).Unix()
 	default: // day: panel-timezone midnight
-		lt := t.In(s.loc)
-		return time.Date(lt.Year(), lt.Month(), lt.Day(), 0, 0, 0, 0, s.loc).Unix()
+		loc := s.currentLoc()
+		lt := t.In(loc)
+		return time.Date(lt.Year(), lt.Month(), lt.Day(), 0, 0, 0, 0, loc).Unix()
 	}
 }
 
@@ -436,6 +479,6 @@ func (s *Sampler) nextBucket(ts int64, granularity string) int64 {
 	case "hour":
 		return ts + 3600
 	default:
-		return time.Unix(ts, 0).In(s.loc).AddDate(0, 0, 1).Unix()
+		return time.Unix(ts, 0).In(s.currentLoc()).AddDate(0, 0, 1).Unix()
 	}
 }

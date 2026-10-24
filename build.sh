@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the SubDist panel: frontend -> embedded dist -> single Go binary.
+# Build the singbox-ui panel: frontend -> embedded dist -> single Go binary.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +27,6 @@ cp -r "$ROOT/web/dist/." "$WEBDIST/"
 echo "==> Building server binary"
 mkdir -p "$ROOT/bin"
 cd "$ROOT/server"
-go build -trimpath -o "$ROOT/bin/subdist" ./cmd/subdist
+go build -trimpath -o "$ROOT/bin/singbox-ui" ./cmd/singbox-ui
 
-echo "==> Done: $ROOT/bin/subdist"
+echo "==> Done: $ROOT/bin/singbox-ui"

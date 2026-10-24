@@ -1,4 +1,4 @@
-module subdist/server
+module singbox-ui/server
 
 go 1.27
 

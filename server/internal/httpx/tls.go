@@ -19,8 +19,8 @@ import (
 
 // TLSConfig describes where the panel's TLS material comes from.
 type TLSConfig struct {
-	CertFile string // from SUBDIST_TLS_CERT; may be empty
-	KeyFile  string // from SUBDIST_TLS_KEY; may be empty
+	CertFile string // from SINGBOX_UI_TLS_CERT; may be empty
+	KeyFile  string // from SINGBOX_UI_TLS_KEY; may be empty
 	DataDir  string // fallback location for the generated self-signed pair
 }
 
@@ -42,7 +42,7 @@ func EnsurePairFiles(log *slog.Logger, cfg TLSConfig) (certFile, keyFile string,
 			}
 			log.Warn("generated self-signed TLS certificate for local use",
 				"cert", certFile, "key", keyFile,
-				"note", "set SUBDIST_TLS_CERT/SUBDIST_TLS_KEY to use a real certificate")
+				"note", "set SINGBOX_UI_TLS_CERT/SINGBOX_UI_TLS_KEY to use a real certificate")
 		}
 	}
 	if _, err := tls.LoadX509KeyPair(certFile, keyFile); err != nil {
@@ -63,7 +63,7 @@ func generateSelfSigned(certFile, keyFile string) error {
 	hostname, _ := os.Hostname()
 	template := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "SubDist (self-signed)"},
+		Subject:      pkix.Name{CommonName: "singbox-ui (self-signed)"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,

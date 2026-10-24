@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export type Theme = "dark" | "light";
 
-const STORAGE_KEY = "subdist-theme";
+const STORAGE_KEY = "singbox-ui-theme";
 
 function initialTheme(): Theme {
   try {

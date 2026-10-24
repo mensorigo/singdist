@@ -39,10 +39,12 @@ export interface DashboardSummary {
   uploadTotal: number;
   downloadTotal: number;
   activeConns: number;
+  distinctIPs: number;
   series: DashboardSample[];
   system: SystemInfo;
   traffic: TrafficInfo;
   panelUptimeSecs: number;
+  timezone: string;
 }
 
 export interface CertInfo {
@@ -88,6 +90,44 @@ export class ApiError extends Error {
   }
 }
 
+// Config-change notifications: any successful mutation on a
+// config-affecting endpoint tells subscribers (the top-bar sync
+// control) to reload the sync status immediately, instead of waiting
+// for a manual refresh. Reads and auth calls never emit.
+type ConfigChangeListener = () => void;
+
+const configChangeListeners = new Set<ConfigChangeListener>();
+
+export function onConfigChanged(fn: ConfigChangeListener): () => void {
+  configChangeListeners.add(fn);
+  return () => {
+    configChangeListeners.delete(fn);
+  };
+}
+
+const CONFIG_PATHS = [
+  "/api/inbounds",
+  "/api/subscriptions",
+  "/api/templates",
+  "/api/certs",
+  "/api/settings",
+  "/api/sync",
+];
+
+function emitConfigChanged(path: string, method: string | undefined) {
+  if (!method || method === "GET") return;
+  if (!CONFIG_PATHS.some((p) => path === p || path.startsWith(p + "/"))) {
+    return;
+  }
+  for (const fn of configChangeListeners) {
+    try {
+      fn();
+    } catch {
+      /* a listener must never break the request */
+    }
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const resp = await fetch(path, {
     credentials: "include",
@@ -102,6 +142,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       typeof data.message === "string" ? data.message : resp.statusText,
     );
   }
+  emitConfigChanged(path, init?.method);
   return data as T;
 }
 
@@ -118,8 +159,41 @@ export const api = {
       body: JSON.stringify({ username, password }),
     }),
   logout: () => request<{ ok: boolean }>("/api/auth/logout", { method: "POST" }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>("/api/auth/password", {
+      method: "PATCH",
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+  changeUsername: (username: string, currentPassword: string) =>
+    request<{ username: string }>("/api/auth/username", {
+      method: "PATCH",
+      body: JSON.stringify({ username, currentPassword }),
+    }),
+  changeAccount: (body: {
+    username?: string;
+    currentPassword: string;
+    newPassword?: string;
+  }) =>
+    request<{ username: string }>("/api/auth/account", {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    }),
+  revokeOtherSessions: () =>
+    request<{ revoked: number }>("/api/auth/sessions/revoke-others", {
+      method: "POST",
+    }),
   dashboardSummary: () =>
     request<DashboardSummary>("/api/dashboard/summary"),
+  logs: (params: LogQuery) => {
+    const qs = new URLSearchParams();
+    qs.set("category", params.category);
+    if (params.q) qs.set("q", params.q);
+    if (params.level) qs.set("level", params.level);
+    if (params.result) qs.set("result", params.result);
+    if (params.before) qs.set("before", params.before);
+    qs.set("limit", String(params.limit ?? 100));
+    return request<LogPage>(`/api/logs?${qs.toString()}`);
+  },
   dashboardTrend: (granularity: TrendGranularity) =>
     request<DashboardTrend>(`/api/dashboard/trend?granularity=${granularity}`),
   certs: {
@@ -139,6 +213,11 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ names, days, note, activate }),
       }),
+    rename: (id: string, note: string) =>
+      request<CertInfo>(`/api/certs/${encodeURIComponent(id)}/note`, {
+        method: "PATCH",
+        body: JSON.stringify({ note }),
+      }),
     activate: (id: string) =>
       request<CertInfo>(`/api/certs/${encodeURIComponent(id)}/activate`, {
         method: "POST",
@@ -148,4 +227,343 @@ export const api = {
         method: "DELETE",
       }),
   },
+  inbounds: {
+    list: () => request<InboundList>("/api/inbounds"),
+    create: (body: InboundCreate) =>
+      request<InboundView>("/api/inbounds", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    update: (id: number, body: InboundUpdate) =>
+      request<InboundView>(`/api/inbounds/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    remove: (id: number) =>
+      request<{ ok: boolean }>(`/api/inbounds/${id}`, { method: "DELETE" }),
+    setEnabled: (id: number, enabled: boolean) =>
+      request<InboundView>(`/api/inbounds/${id}/enabled`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }),
+    keypair: () =>
+      request<RealityKeypair>("/api/inbounds/reality-keypair", {
+        method: "POST",
+      }),
+  },
+  templates: {
+    list: () => request<TemplateView[]>("/api/templates"),
+    create: (body: TemplateRequest) =>
+      request<TemplateView>("/api/templates", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    update: (id: number, body: TemplateRequest) =>
+      request<TemplateView>(`/api/templates/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    remove: (id: number) =>
+      request<{ ok: boolean }>(`/api/templates/${id}`, { method: "DELETE" }),
+  },
+  subscriptions: {
+    list: () => request<SubscriptionView[]>("/api/subscriptions"),
+    create: (body: SubscriptionRequest) =>
+      request<SubscriptionView>("/api/subscriptions", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    update: (id: number, body: SubscriptionRequest) =>
+      request<SubscriptionView>(`/api/subscriptions/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    remove: (id: number) =>
+      request<{ ok: boolean }>(`/api/subscriptions/${id}`, {
+        method: "DELETE",
+      }),
+    setEnabled: (id: number, enabled: boolean) =>
+      request<SubscriptionView>(`/api/subscriptions/${id}/enabled`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }),
+    resetToken: (id: number) =>
+      request<SubscriptionView>(`/api/subscriptions/${id}/reset-token`, {
+        method: "POST",
+      }),
+    resetUuid: (id: number) =>
+      request<SubscriptionView>(`/api/subscriptions/${id}/reset-uuid`, {
+        method: "POST",
+      }),
+    preview: (id: number) =>
+      request<SubscriptionPreview>(`/api/subscriptions/${id}/preview`),
+  },
+  settings: {
+    get: () => request<SettingsView>("/api/settings"),
+    update: (body: SettingsUpdate) =>
+      request<SettingsView>("/api/settings", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+  },
+  sync: {
+    status: () => request<SyncStatus>("/api/sync/status"),
+    run: () => request<SyncLogEntry>("/api/sync", { method: "POST" }),
+  },
 };
+
+export interface SyncLogEntry {
+  id: number;
+  at: number;
+  action: string;
+  result: string;
+  hash: string;
+  detail: string;
+}
+
+export type LogCategory = "core" | "panel" | "connection";
+
+export interface LogEntry {
+  ts: number;
+  category: LogCategory;
+  level?: string;
+  message?: string;
+  source?: string;
+  destination?: string;
+  tag?: string;
+  user?: string;
+  action?: string;
+  target?: string;
+  result?: string;
+  detail?: string;
+}
+
+export interface LogPage {
+  entries: LogEntry[];
+  nextBefore: string;
+}
+
+export interface LogQuery {
+  category: LogCategory;
+  q?: string;
+  level?: string;
+  result?: string;
+  before?: string;
+  limit?: number;
+}
+
+export interface SyncStatus {
+  targetPath: string;
+  restartEnabled: boolean;
+  desiredHash: string;
+  targetHash: string;
+  inSync: boolean;
+  last: SyncLogEntry | null;
+}
+
+export interface SubscriptionPreview {
+  format: string;
+  contentType: string;
+  content: string;
+}
+
+export interface SettingsView {
+  webrtcMode: "proxy" | "reject" | "off";
+  dnsFallback: "foreign" | "domestic";
+  dnsRespectRules: boolean;
+  nodeName: string;
+  linkFormat: "clash" | "singbox";
+  skipCertVerify: boolean;
+  publicHost: string;
+  showUserinfo: boolean;
+  updateIntervalHours: number;
+  textSelectable: boolean;
+  timezone: string;
+  showWarnings: boolean;
+}
+
+export interface SettingsUpdate {
+  webrtcMode?: SettingsView["webrtcMode"];
+  dnsFallback?: SettingsView["dnsFallback"];
+  dnsRespectRules?: boolean;
+  nodeName?: string;
+  linkFormat?: SettingsView["linkFormat"];
+  skipCertVerify?: boolean;
+  publicHost?: string;
+  showUserinfo?: boolean;
+  updateIntervalHours?: number;
+  textSelectable?: boolean;
+  timezone?: string;
+  showWarnings?: boolean;
+}
+
+export interface TemplateView {
+  id: number;
+  name: string;
+  inboundIds: number[];
+  subscriptionCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface TemplateRequest {
+  name: string;
+  inboundIds: number[];
+}
+
+export type SubscriptionStatus =
+  | "active"
+  | "disabled"
+  | "expired"
+  | "over_quota";
+
+export interface SubscriptionView {
+  id: number;
+  name: string;
+  uuid: string;
+  token: string;
+  templateId: number;
+  templateName: string;
+  limitBytes: number;
+  usedUp: number;
+  usedDown: number;
+  usedBytes: number;
+  expireAt: number;
+  maxIps: number;
+  enabled: boolean;
+  status: SubscriptionStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface SubscriptionRequest {
+  name: string;
+  templateId: number;
+  limitBytes: number;
+  expireAt: number;
+  maxIps: number;
+}
+
+export interface RealityParams {
+  sni: string;
+  publicKey: string;
+  privateKey: string;
+  shortId: string;
+  flow: string;
+}
+
+export interface Hy2Params {
+  upMbps: number;
+  downMbps: number;
+  password: string;
+  obfs: string;
+  obfsPassword: string;
+}
+
+export interface TuicParams {
+  uuid: string;
+  password: string;
+  congestionControl: string;
+  sni: string;
+}
+
+export interface ShadowsocksParams {
+  method: string;
+  password: string;
+}
+
+export interface AnyTLSParams {
+  password: string;
+  sni: string;
+}
+
+export interface TrojanParams {
+  password: string;
+  sni: string;
+}
+
+export type InboundProtocol =
+  | "vless-reality"
+  | "hysteria2"
+  | "tuic"
+  | "shadowsocks"
+  | "anytls"
+  | "trojan";
+
+export type InboundParams =
+  | RealityParams
+  | Hy2Params
+  | TuicParams
+  | ShadowsocksParams
+  | AnyTLSParams
+  | TrojanParams;
+
+export type InboundStatus =
+  | "synced"
+  | "drifted"
+  | "pending"
+  | "unknown"
+  | "disabled";
+
+export interface InboundDiff {
+  field:
+    | "sni"
+    | "publicKey"
+    | "shortId"
+    | "upMbps"
+    | "downMbps"
+    | "uuid"
+    | "congestion"
+    | "method";
+  panel: string;
+  running: string;
+}
+
+export interface InboundView {
+  id: number;
+  name: string;
+  protocol: InboundProtocol;
+  port: number;
+  params: InboundParams;
+  enabled: boolean;
+  status: InboundStatus;
+  diffs?: InboundDiff[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RunningInbound {
+  tag: string;
+  type: string;
+  port: number;
+  sni?: string;
+  publicKey?: string;
+  shortId?: string;
+  upMbps?: number;
+  downMbps?: number;
+}
+
+export interface InboundList {
+  items: InboundView[];
+  runningAvailable: boolean;
+  extras: RunningInbound[];
+}
+
+export interface InboundCreate {
+  name: string;
+  protocol: string;
+  port: number;
+  params: InboundParams;
+}
+
+export interface InboundUpdate {
+  name: string;
+  port: number;
+  params: InboundParams;
+}
+
+export interface RealityKeypair {
+  publicKey: string;
+  privateKey: string;
+  shortId: string;
+}

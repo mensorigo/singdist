@@ -7,6 +7,9 @@ import {
   type ReactNode,
 } from "react";
 
+import { toast } from "sonner";
+
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,18 +26,14 @@ function formatDate(unix: number): string {
   return new Date(unix * 1000).toLocaleDateString("zh-CN");
 }
 
-function sourceLabel(source: string): string {
-  if (source === "bootstrap") return "启动导入";
-  if (source === "selfsigned") return "自签名生成";
-  return "上传";
-}
-
 function DaysBadge({
   daysLeft,
   expired,
+  showWarnings,
 }: {
   daysLeft: number;
   expired: boolean;
+  showWarnings: boolean;
 }) {
   if (expired) {
     return (
@@ -47,7 +46,9 @@ function DaysBadge({
     daysLeft < 15
       ? "bg-destructive/10 text-destructive"
       : daysLeft <= 60
-        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+        ? showWarnings
+          ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+          : "bg-muted text-muted-foreground"
         : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
   return (
     <span
@@ -75,13 +76,17 @@ const TEXTAREA_CLS =
 
 export default function CertificatesPage({
   refreshSignal,
+  showWarnings,
 }: {
   refreshSignal: number;
+  showWarnings: boolean;
 }) {
   const [list, setList] = useState<CertList | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
 
   const refresh = useCallback(async () => {
     try {
@@ -103,12 +108,17 @@ export default function CertificatesPage({
     void refresh();
   }, [refresh, refreshSignal]);
 
-  async function runAction(id: string, fn: () => Promise<unknown>) {
+  async function runAction(
+    id: string,
+    fn: () => Promise<unknown>,
+    successMessage?: string,
+  ) {
     setActionError(null);
     setBusyId(id);
     try {
       await fn();
       await refresh();
+      if (successMessage) toast.success(successMessage);
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "操作失败，请重试");
     } finally {
@@ -117,14 +127,33 @@ export default function CertificatesPage({
   }
 
   const handleActivate = (v: CertInfo) =>
-    runAction(v.id, () => api.certs.activate(v.id));
+    runAction(v.id, () => api.certs.activate(v.id), "证书已启用");
 
-  const handleDelete = (v: CertInfo) => {
-    const name = v.note || v.commonName || v.id;
-    if (!window.confirm(`确定要删除证书「${name}」吗？此操作不可恢复。`)) {
-      return;
+  const startEditNote = (v: CertInfo) => {
+    setEditingNoteId(v.id);
+    setNoteDraft(v.note);
+  };
+
+  const saveNote = (v: CertInfo) => {
+    setEditingNoteId(null);
+    if (noteDraft.trim() !== v.note) {
+      void runAction(
+        v.id,
+        () => api.certs.rename(v.id, noteDraft.trim()),
+        "备注已更新",
+      );
     }
-    void runAction(v.id, () => api.certs.remove(v.id));
+  };
+
+  const [pendingDelete, setPendingDelete] = useState<CertInfo | null>(null);
+
+  const handleDelete = (v: CertInfo) => setPendingDelete(v);
+
+  const confirmDelete = () => {
+    if (!pendingDelete) return;
+    const v = pendingDelete;
+    setPendingDelete(null);
+    void runAction(v.id, () => api.certs.remove(v.id), "证书已删除");
   };
 
   if (!list) {
@@ -148,7 +177,7 @@ export default function CertificatesPage({
           <p className="font-medium">当前证书已过期，请立即更换。</p>
         </div>
       )}
-      {active && !active.expired && active.daysLeft < 30 && (
+      {showWarnings && active && !active.expired && active.daysLeft < 30 && (
         <div
           role="alert"
           className="flex items-start gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 px-3.5 py-2.5 text-[13px] text-amber-700 dark:text-amber-400"
@@ -203,28 +232,21 @@ export default function CertificatesPage({
                 </span>
               </Field>
               <Field label="剩余天数">
-                <DaysBadge daysLeft={active.daysLeft} expired={active.expired} />
+                <DaysBadge
+                  daysLeft={active.daysLeft}
+                  expired={active.expired}
+                  showWarnings={showWarnings}
+                />
               </Field>
               <Field label="密钥匹配">
                 {active.keyMatches ? "是" : "否"}
               </Field>
               <Field label="自签名">{active.selfSigned ? "是" : "否"}</Field>
-              <Field label="来源">
-                {sourceLabel(active.source)}
-                {active.note ? ` · ${active.note}` : ""}
-              </Field>
               <Field label="导入时间">
                 <span className="tabular-nums">
                   {formatDateTime(active.importedAt)}
                 </span>
               </Field>
-              <div className="sm:col-span-2 lg:col-span-3">
-                <Field label="SHA-256 指纹">
-                  <span className="break-all font-mono text-xs">
-                    {active.fingerprint}
-                  </span>
-                </Field>
-              </div>
             </div>
           </div>
         ) : (
@@ -242,7 +264,7 @@ export default function CertificatesPage({
           <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">备注 / 来源</th>
+                <th className="py-2 pr-3 font-medium">备注</th>
                 <th className="py-2 pr-3 font-medium">主域名</th>
                 <th className="py-2 pr-3 font-medium">颁发者</th>
                 <th className="py-2 pr-3 font-medium">到期</th>
@@ -256,10 +278,43 @@ export default function CertificatesPage({
               {list.versions.map((v) => (
                 <tr key={v.id} className="border-b last:border-0">
                   <td className="py-2.5 pr-3">
-                    <div>{v.note || "—"}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {sourceLabel(v.source)}
-                    </div>
+                    {editingNoteId === v.id ? (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          value={noteDraft}
+                          autoFocus
+                          onChange={(e) => setNoteDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") saveNote(v);
+                            if (e.key === "Escape") setEditingNoteId(null);
+                          }}
+                          placeholder="备注名"
+                          className="h-8 w-44"
+                        />
+                        <Button
+                          size="sm"
+                          disabled={busyId === v.id}
+                          onClick={() => saveNote(v)}
+                        >
+                          保存
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setEditingNoteId(null)}
+                        >
+                          取消
+                        </Button>
+                      </div>
+                    ) : (
+                      <div
+                        title="双击编辑备注"
+                        onDoubleClick={() => startEditNote(v)}
+                        className="cursor-default select-none"
+                      >
+                        {v.note || "—"}
+                      </div>
+                    )}
                   </td>
                   <td className="py-2.5 pr-3">{v.commonName || "—"}</td>
                   <td className="py-2.5 pr-3">{v.issuer || "—"}</td>
@@ -267,7 +322,11 @@ export default function CertificatesPage({
                     {formatDate(v.notAfter)}
                   </td>
                   <td className="py-2.5 pr-3">
-                    <DaysBadge daysLeft={v.daysLeft} expired={v.expired} />
+                    <DaysBadge
+                      daysLeft={v.daysLeft}
+                      expired={v.expired}
+                      showWarnings={showWarnings}
+                    />
                   </td>
                   <td className="py-2.5 pr-3 tabular-nums">
                     {formatDateTime(v.importedAt)}
@@ -285,20 +344,19 @@ export default function CertificatesPage({
                   </td>
                   <td className="py-2.5">
                     {!v.active && (
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-3">
                         <Button
-                          size="sm"
                           disabled={busyId === v.id}
                           onClick={() => void handleActivate(v)}
+                          className="h-8 rounded-xl px-3"
                         >
                           启用
                         </Button>
                         <Button
-                          variant="ghost"
-                          size="sm"
+                          variant="destructive"
                           disabled={busyId === v.id}
                           onClick={() => handleDelete(v)}
-                          className="text-destructive hover:text-destructive"
+                          className="h-8 rounded-xl px-3"
                         >
                           删除
                         </Button>
@@ -325,6 +383,22 @@ export default function CertificatesPage({
       <UploadCard onUploaded={refresh} />
 
       <GenerateCard onGenerated={refresh} />
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+        title="删除证书"
+        description={
+          pendingDelete
+            ? `确定要删除证书「${pendingDelete.note || pendingDelete.commonName || pendingDelete.id}」吗？此操作不可恢复。`
+            : undefined
+        }
+        confirmLabel="删除"
+        destructive
+        onConfirm={confirmDelete}
+      />
     </div>
   );
 }
@@ -413,42 +487,28 @@ function PemField({
   );
 }
 
-// Generate a self-signed certificate in place: the names are the
-// addresses the panel will be visited by (domain or IP) — clients check
-// them against the address they connected to.
+// One-click self-signed certificate: the name is the address the admin
+// is using to view this page right now (domain or IP), validity 365
+// days, stored inactive — switching to it stays an explicit action in
+// the versions table above.
 function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void> }) {
-  const [namesText, setNamesText] = useState("");
-  const [days, setDays] = useState("365");
   const [note, setNote] = useState("");
-  const [activate, setActivate] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleGenerate() {
     setFormError(null);
     setFormSuccess(null);
-    const names = namesText
-      .split(/[\s,，]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (names.length === 0) {
-      setFormError("请至少填写一个域名或 IP");
-      return;
-    }
-    const daysNum = Number.parseInt(days, 10);
-    if (!Number.isFinite(daysNum) || daysNum < 1 || daysNum > 3650) {
-      setFormError("有效期天数需在 1 到 3650 之间");
-      return;
-    }
     setSubmitting(true);
     try {
-      await api.certs.selfSigned(names, daysNum, note.trim(), activate);
-      setNamesText("");
+      const host = window.location.hostname;
+      const info = await api.certs.selfSigned([host], 365, note.trim(), false);
       setNote("");
-      setActivate(false);
-      setFormSuccess(activate ? "自签名证书已生成并启用" : "自签名证书已生成并保存");
+      setFormSuccess(
+        `已生成：${info.commonName}（有效期 ${info.daysLeft} 天），已存入上方版本列表，需要时点“启用”即可切换`,
+      );
+      toast.success("证书生成成功");
       await onGenerated();
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : "生成失败，请重试");
@@ -461,60 +521,27 @@ function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void> }) {
     <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <p className="text-base font-semibold">生成自签名证书</p>
       <p className="mt-1 text-[13px] text-muted-foreground">
-        名字填你将来访问面板时用的域名或 IP（客户端会核对它与地址是否一致），
-        多个用逗号或空格分隔。无需向任何机构申请，但浏览器不会自动信任自签名证书。
+        按你当前访问面板的地址（域名或 IP）一键生成一张自签名证书，有效期
+        365 天。生成后会进入上方版本列表，不会自动切换当前证书。
       </p>
-      <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-        <div className="grid gap-4 md:grid-cols-[1fr_160px]">
-          <div className="space-y-2">
-            <Label htmlFor="ss-names">域名或 IP</Label>
-            <Input
-              id="ss-names"
-              value={namesText}
-              onChange={(e) => setNamesText(e.target.value)}
-              placeholder="例如：panel.example.com 或 192.168.1.10"
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="ss-days">有效期（天）</Label>
-            <Input
-              id="ss-days"
-              type="number"
-              min={1}
-              max={3650}
-              value={days}
-              onChange={(e) => setDays(e.target.value)}
-            />
-          </div>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="ss-note">备注（可选）</Label>
-          <Input
-            id="ss-note"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="例如：内网测试用"
-          />
-        </div>
-        <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={activate}
-            onChange={(e) => setActivate(e.target.checked)}
-            className="h-4 w-4 rounded border accent-primary"
-          />
-          生成并立即启用
-        </label>
-        {formError && <p className="text-[13px] text-destructive">{formError}</p>}
-        {formSuccess && (
-          <p className="text-[13px] text-emerald-600 dark:text-emerald-400">
-            {formSuccess}
-          </p>
-        )}
-        <Button type="submit" disabled={submitting}>
-          {submitting ? "生成中…" : "生成证书"}
-        </Button>
-      </form>
+      <div className="mt-4 max-w-md space-y-2">
+        <Label htmlFor="ss-note">备注名（可选）</Label>
+        <Input
+          id="ss-note"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          placeholder="不填则自动编号，如 CERT-8F3K"
+        />
+      </div>
+      {formError && <p className="mt-3 text-[13px] text-destructive">{formError}</p>}
+      {formSuccess && (
+        <p className="mt-3 text-[13px] text-emerald-600 dark:text-emerald-400">
+          {formSuccess}
+        </p>
+      )}
+      <Button className="mt-4" onClick={handleGenerate} disabled={submitting}>
+        {submitting ? "生成中…" : "一键生成自签名证书"}
+      </Button>
     </section>
   );
 }
@@ -576,7 +603,7 @@ function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) {
             id="cert-note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="例如：2026 年续期证书"
+            placeholder="不填则自动编号，如 CERT-8F3K"
           />
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">

@@ -9,7 +9,7 @@ import (
 
 // fakeClient produces slowly varying synthetic counters so the panel can be
 // developed and demoed without a running sing-box. Selected with
-// SUBDIST_CORE=fake.
+// SINGBOX_UI_CORE=fake.
 type fakeClient struct {
 	mu        sync.Mutex
 	startedAt time.Time

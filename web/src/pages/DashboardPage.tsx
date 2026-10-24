@@ -1,6 +1,5 @@
 import {
   Activity,
-  ArrowDownUp,
   Cpu,
   Database,
   HardDrive,
@@ -8,6 +7,7 @@ import {
   Server,
   TrendingUp,
   TriangleAlert,
+  Users,
 } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
@@ -149,12 +149,6 @@ export default function DashboardPage({
           barPct={diskPct}
         />
         <DashCard
-          icon={<ArrowDownUp className="h-5 w-5" />}
-          label="网络累计 ↓"
-          value={formatBytes(sys.netRxBytes)}
-          sub={`累计上传 ↑ ${formatBytes(sys.netTxBytes)}`}
-        />
-        <DashCard
           icon={<Database className="h-5 w-5" />}
           label="总已用流量"
           value={formatBytes(data.traffic.totalUp + data.traffic.totalDown)}
@@ -164,12 +158,18 @@ export default function DashboardPage({
           icon={<TrendingUp className="h-5 w-5" />}
           label="今日流量"
           value={formatBytes(data.traffic.todayUp + data.traffic.todayDown)}
-          sub="按 Asia/Shanghai 日期"
+          sub={`按 ${data.timezone} 日期`}
+        />
+        <DashCard
+          icon={<Users className="h-5 w-5" />}
+          label="独立 IP"
+          value={String(data.distinctIPs)}
+          sub={`共 ${data.activeConns} 条连接`}
         />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <TrendCard refreshSignal={refreshSignal} />
+        <TrendCard refreshSignal={refreshSignal} timezone={data.timezone} />
         <RealtimeCard data={data} />
       </div>
     </div>
@@ -227,7 +227,13 @@ function DashCard({
   );
 }
 
-function TrendCard({ refreshSignal }: { refreshSignal: number }) {
+function TrendCard({
+  refreshSignal,
+  timezone,
+}: {
+  refreshSignal: number;
+  timezone: string;
+}) {
   const [granularity, setGranularity] = useState<TrendGranularity>("day");
   const [points, setPoints] = useState<TrendPoint[]>([]);
 
@@ -252,18 +258,24 @@ function TrendCard({ refreshSignal }: { refreshSignal: number }) {
   const meta = GRANULARITIES.find((g) => g.key === granularity)!;
   const max = Math.max(...points.map((p) => p.up + p.down), 1);
 
+  // Trend labels render in the panel timezone, not the browser's, so
+  // day boundaries match the backend buckets.
   const labelFor = (ts: number) => {
     const d = new Date(ts * 1000);
     if (granularity === "day") {
-      const m = String(d.getMonth() + 1).padStart(2, "0");
-      const day = String(d.getDate()).padStart(2, "0");
-      return `${d.getFullYear()}-${m}-${day}`;
+      return new Intl.DateTimeFormat("en-CA", {
+        timeZone: timezone,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(d);
     }
-    return d.toLocaleTimeString("zh-CN", {
+    return new Intl.DateTimeFormat("zh-CN", {
+      timeZone: timezone,
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
-    });
+    }).format(d);
   };
 
   return (
@@ -272,7 +284,7 @@ function TrendCard({ refreshSignal }: { refreshSignal: number }) {
         <div>
           <p className="text-base font-semibold">流量趋势</p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {meta.range} · Asia/Shanghai
+            {meta.range} · {timezone}
           </p>
         </div>
         <div className="flex items-center gap-3">

@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
 
 import AppLayout, { ROUTES, type RouteKey } from "@/components/layout/AppLayout";
-import { api } from "@/lib/api";
+import { Toaster } from "@/components/ui/sonner";
+import { api, onConfigChanged } from "@/lib/api";
 import { useTheme } from "@/lib/theme";
 import CertificatesPage from "@/pages/CertificatesPage";
 import DashboardPage from "@/pages/DashboardPage";
+import InboundsPage from "@/pages/InboundsPage";
 import LoginPage from "@/pages/LoginPage";
-import PlaceholderPage from "@/pages/PlaceholderPage";
+import LogsPage from "@/pages/LogsPage";
+import SecurityPage from "@/pages/SecurityPage";
+import SettingsPage from "@/pages/SettingsPage";
+import SubscriptionsPage from "@/pages/SubscriptionsPage";
 
 function routeFromPath(path: string): RouteKey {
   const found = ROUTES.find((r) => r.path === path);
@@ -33,6 +38,36 @@ export default function App() {
   // and form contents all survive a refresh).
   const [refreshNonce, setRefreshNonce] = useState(0);
   const handleRefresh = useCallback(() => setRefreshNonce((n) => n + 1), []);
+
+  // Panel-wide text selection: server setting, default off. Refetched
+  // on login and whenever any settings change lands (the settings
+  // page saves through the same request layer that emits the event).
+  // The yellow-warnings switch rides the same fetch (default on).
+  const [textSelectable, setTextSelectable] = useState(false);
+  const [showWarnings, setShowWarnings] = useState(true);
+  useEffect(() => {
+    if (auth.phase !== "authed") return;
+    let cancelled = false;
+    const fetchSelection = () => {
+      api.settings
+        .get()
+        .then((v) => {
+          if (!cancelled) {
+            setTextSelectable(v.textSelectable);
+            setShowWarnings(v.showWarnings);
+          }
+        })
+        .catch(() => {
+          /* defaults stand on failure */
+        });
+    };
+    fetchSelection();
+    const off = onConfigChanged(fetchSelection);
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [auth.phase]);
 
   // Session check on load: the server is the source of truth.
   useEffect(() => {
@@ -93,10 +128,16 @@ export default function App() {
   }
 
   if (auth.phase === "anon") {
-    return <LoginPage onLogin={handleLogin} />;
+    return (
+      <>
+        <LoginPage onLogin={handleLogin} />
+        <Toaster theme={theme} />
+      </>
+    );
   }
 
   return (
+    <>
     <AppLayout
       route={route}
       onNavigate={navigate}
@@ -105,16 +146,39 @@ export default function App() {
       onToggleTheme={toggleTheme}
       onLogout={handleLogout}
       onRefresh={handleRefresh}
+      syncRefreshSignal={refreshNonce}
+      onSynced={handleRefresh}
+      textSelectable={textSelectable}
     >
       {route === "dashboard" && (
         <DashboardPage refreshSignal={refreshNonce} />
       )}
-      {route === "subscriptions" && <PlaceholderPage title="订阅管理" />}
-      {route === "inbounds" && <PlaceholderPage title="入站" />}
-      {route === "certificates" && (
-        <CertificatesPage refreshSignal={refreshNonce} />
+      {route === "subscriptions" && (
+        <SubscriptionsPage refreshSignal={refreshNonce} />
       )}
-      {route === "settings" && <PlaceholderPage title="设置" />}
+      {route === "inbounds" && (
+        <InboundsPage refreshSignal={refreshNonce} showWarnings={showWarnings} />
+      )}
+      {route === "certificates" && (
+        <CertificatesPage
+          refreshSignal={refreshNonce}
+          showWarnings={showWarnings}
+        />
+      )}
+      {route === "settings" && (
+        <SettingsPage refreshSignal={refreshNonce} />
+      )}
+      {route === "logs" && <LogsPage refreshSignal={refreshNonce} />}
+      {route === "security" && (
+        <SecurityPage
+          username={auth.username}
+          onUsernameChanged={(u) =>
+            setAuth({ phase: "authed", username: u })
+          }
+        />
+      )}
     </AppLayout>
+    <Toaster theme={theme} />
+    </>
   );
 }

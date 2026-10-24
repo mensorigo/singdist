@@ -13,6 +13,10 @@ data/
 *.db-wal
 *.db-shm
 
+# Dev-only pages kept locally, never archived (toast playground; the
+# sidebar/test wiring in tracked files is removed before archival)
+web/src/pages/TestPage.tsx
+
 # Local environment
 .env
 

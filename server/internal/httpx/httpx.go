@@ -19,7 +19,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"subdist/server/internal/apix"
+	"singbox-ui/server/internal/apix"
 )
 
 // TokenValidator resolves a raw session cookie token to an admin identity.

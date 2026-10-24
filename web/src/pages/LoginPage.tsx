@@ -18,7 +18,7 @@ interface Props {
 }
 
 export default function LoginPage({ onLogin }: Props) {
-  const [username, setUsername] = useState("root");
+  const [username, setUsername] = useState("singbox-ui");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -55,7 +55,7 @@ export default function LoginPage({ onLogin }: Props) {
             <KeyRound className="h-6 w-6" />
           </div>
           <CardTitle className="text-[22px] font-semibold tracking-tight">
-            SingDist
+            singbox-ui
           </CardTitle>
           <CardDescription>管理员登录</CardDescription>
         </CardHeader>

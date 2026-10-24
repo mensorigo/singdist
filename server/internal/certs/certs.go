@@ -139,7 +139,7 @@ func (m *Manager) Bootstrap(certFile, keyFile string) error {
 		if err != nil {
 			return fmt.Errorf("certs: read bootstrap key: %w", err)
 		}
-		_, err = m.addLocked(certPEM, keyPEM, "启动时导入的证书", "bootstrap", true)
+		_, err = m.addLocked(certPEM, keyPEM, "", "bootstrap", true)
 		return err
 	}
 
@@ -169,6 +169,28 @@ func (m *Manager) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error)
 		return nil, fmt.Errorf("certs: no certificate loaded")
 	}
 	return cert, nil
+}
+
+// ActivePEM returns the active version's certificate and key PEM. The
+// sync engine embeds them into generated core configs for the TLS
+// password protocols (hysteria2 / tuic / anytls / trojan).
+func (m *Manager) ActivePEM() (certPEM, keyPEM []byte, err error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	info, ok := m.activeLocked()
+	if !ok {
+		return nil, nil, fmt.Errorf("certs: no active certificate")
+	}
+	dir := filepath.Join(m.versionsDir, info.ID)
+	certPEM, err = os.ReadFile(filepath.Join(dir, "cert.pem"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("certs: read active cert.pem: %w", err)
+	}
+	keyPEM, err = os.ReadFile(filepath.Join(dir, "key.pem"))
+	if err != nil {
+		return nil, nil, fmt.Errorf("certs: read active key.pem: %w", err)
+	}
+	return certPEM, keyPEM, nil
 }
 
 // List returns every stored version, most recently imported first.
@@ -241,12 +263,38 @@ func (m *Manager) GenerateSelfSigned(names []string, days int, note string, acti
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
-	if note == "" {
-		note = "自签名证书"
-	}
+	// An empty note is fine: addLocked assigns the standard CERT-XXXX name.
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.addLocked(certPEM, keyPEM, note, "selfsigned", activate)
+}
+
+// UpdateNote rewrites a version's display note in its meta.json. The note
+// is a free-form label (max 120 characters); everything else about the
+// version is untouched.
+func (m *Manager) UpdateNote(id, note string) (Info, error) {
+	note = strings.TrimSpace(note)
+	if len([]rune(note)) > 120 {
+		return Info{}, errValidation("note must be at most 120 characters")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !validID(id) || !m.exists(id) {
+		return Info{}, errNotFound(id)
+	}
+	meta, err := m.readMeta(id)
+	if err != nil {
+		return Info{}, err
+	}
+	meta.Note = note
+	raw, err := json.Marshal(meta)
+	if err != nil {
+		return Info{}, fmt.Errorf("certs: encode meta: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(m.versionsDir, id, "meta.json"), raw, 0o644); err != nil {
+		return Info{}, fmt.Errorf("certs: write meta.json: %w", err)
+	}
+	return m.infoLocked(id)
 }
 
 // Activate switches the served certificate to the given version.
@@ -280,7 +328,39 @@ func (m *Manager) Delete(id string) error {
 
 // --- internals (mu held by callers) ---------------------------------------
 
+// defaultNoteLocked generates the standard note for a certificate that
+// was stored without one: "CERT-XXXX" with four unambiguous letters or
+// digits, collision-checked against existing notes. Callers hold m.mu.
+func (m *Manager) defaultNoteLocked() string {
+	const alphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+	used := map[string]bool{}
+	if infos, err := m.listLocked(); err == nil {
+		for _, in := range infos {
+			used[in.Note] = true
+		}
+	}
+	for attempt := 0; attempt < 16; attempt++ {
+		buf := make([]byte, 4)
+		if _, err := rand.Read(buf); err != nil {
+			break
+		}
+		for i, b := range buf {
+			buf[i] = alphabet[int(b)%len(alphabet)]
+		}
+		candidate := "CERT-" + string(buf)
+		if !used[candidate] {
+			return candidate
+		}
+	}
+	// Practically unreachable fallback: timestamp keeps it unique-ish.
+	return fmt.Sprintf("CERT-%d", time.Now().Unix()%100000)
+}
+
 func (m *Manager) addLocked(certPEM, keyPEM []byte, note, source string, activate bool) (Info, error) {
+	note = strings.TrimSpace(note)
+	if note == "" {
+		note = m.defaultNoteLocked()
+	}
 	if len(certPEM) == 0 || len(keyPEM) == 0 {
 		return Info{}, errValidation("certPem and keyPem are required")
 	}

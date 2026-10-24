@@ -68,9 +68,28 @@ func (c *clashClient) Totals(ctx context.Context) (Totals, error) {
 	if err := c.get(ctx, "/connections", &body); err != nil {
 		return Totals{}, err
 	}
+	// Distinct source IPs across open connections. Each entry is
+	// decoded best-effort: a malformed entry is skipped rather than
+	// failing the whole Totals reading, and empty source IPs
+	// (missing metadata) are never counted as an address.
+	seen := make(map[string]struct{}, len(body.Connections))
+	for _, raw := range body.Connections {
+		var conn struct {
+			Metadata struct {
+				SourceIP string `json:"sourceIP"`
+			} `json:"metadata"`
+		}
+		if err := json.Unmarshal(raw, &conn); err != nil {
+			continue
+		}
+		if ip := conn.Metadata.SourceIP; ip != "" {
+			seen[ip] = struct{}{}
+		}
+	}
 	return Totals{
 		UploadTotal:   body.UploadTotal,
 		DownloadTotal: body.DownloadTotal,
 		ActiveConns:   len(body.Connections),
+		DistinctIPs:   len(seen),
 	}, nil
 }

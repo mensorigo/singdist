@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"subdist/server/internal/apix"
+	"singbox-ui/server/internal/apix"
 )
 
 // Handler exposes the certificate management HTTP endpoints.
@@ -23,6 +23,7 @@ func (h *Handler) RegisterProtected(rg *gin.RouterGroup) {
 	rg.POST("/certs", h.upload)
 	rg.POST("/certs/selfsigned", h.selfSigned)
 	rg.POST("/certs/:id/activate", h.activate)
+	rg.PATCH("/certs/:id/note", h.updateNote)
 	rg.DELETE("/certs/:id", h.remove)
 }
 
@@ -88,6 +89,24 @@ func (h *Handler) selfSigned(c *gin.Context) {
 
 func (h *Handler) activate(c *gin.Context) {
 	info, err := h.mgr.Activate(c.Param("id"))
+	if err != nil {
+		failErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, info)
+}
+
+type noteRequest struct {
+	Note string `json:"note"`
+}
+
+func (h *Handler) updateNote(c *gin.Context) {
+	var req noteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with note")
+		return
+	}
+	info, err := h.mgr.UpdateNote(c.Param("id"), req.Note)
 	if err != nil {
 		failErr(c, err)
 		return

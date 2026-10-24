@@ -13,6 +13,7 @@ type Totals struct {
 	UploadTotal   int64 // cumulative bytes uploaded since core start
 	DownloadTotal int64 // cumulative bytes downloaded since core start
 	ActiveConns   int   // currently open connections
+	DistinctIPs   int   // distinct source IPs across open connections
 }
 
 // CoreClient is the seam between the panel and the proxy core.

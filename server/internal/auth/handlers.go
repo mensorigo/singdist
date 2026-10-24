@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"subdist/server/internal/apix"
+	"singbox-ui/server/internal/apix"
 )
 
 // Handler exposes the auth HTTP endpoints. Registration is split into a
@@ -29,6 +29,9 @@ func (h *Handler) RegisterPublic(rg *gin.RouterGroup) {
 func (h *Handler) RegisterProtected(rg *gin.RouterGroup) {
 	rg.POST("/auth/logout", h.logout)
 	rg.PATCH("/auth/password", h.changePassword)
+	rg.PATCH("/auth/username", h.changeUsername)
+	rg.PATCH("/auth/account", h.changeAccount)
+	rg.POST("/auth/sessions/revoke-others", h.revokeOtherSessions)
 }
 
 type loginRequest struct {
@@ -87,7 +90,7 @@ func (h *Handler) logout(c *gin.Context) {
 
 type changePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword" binding:"required"`
-	NewPassword     string `json:"newPassword" binding:"required,min=8,max=256"`
+	NewPassword     string `json:"newPassword" binding:"required,min=8,max=72"`
 }
 
 func (h *Handler) changePassword(c *gin.Context) {
@@ -98,7 +101,7 @@ func (h *Handler) changePassword(c *gin.Context) {
 	}
 	var req changePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		apix.Fail(c, http.StatusBadRequest, "invalid_request", "currentPassword and a newPassword of at least 8 characters are required")
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "currentPassword and a newPassword of 8–72 characters are required")
 		return
 	}
 	err := h.svc.ChangePassword(c.Request.Context(), adminID, req.CurrentPassword, req.NewPassword)
@@ -110,5 +113,108 @@ func (h *Handler) changePassword(c *gin.Context) {
 		apix.FailInternal(c)
 		return
 	}
+	// A password change is a security event: every other session stops
+	// working. The current session survives (best effort — a revoke
+	// failure must not fail a password change that already landed).
+	if token, err := c.Cookie(CookieName); err == nil && token != "" {
+		_, _ = h.svc.RevokeOtherSessions(c.Request.Context(), adminID, SessionHash(token))
+	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type changeUsernameRequest struct {
+	Username        string `json:"username" binding:"required"`
+	CurrentPassword string `json:"currentPassword" binding:"required"`
+}
+
+func (h *Handler) changeUsername(c *gin.Context) {
+	adminID, ok := apix.AdminID(c)
+	if !ok {
+		apix.Fail(c, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var req changeUsernameRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "username and currentPassword are required")
+		return
+	}
+	username, err := h.svc.ChangeUsername(c.Request.Context(), adminID, req.CurrentPassword, req.Username)
+	switch {
+	case errors.Is(err, ErrWrongPassword):
+		apix.Fail(c, http.StatusBadRequest, "wrong_password", "current password is incorrect")
+		return
+	case errors.Is(err, ErrInvalidUsername):
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "username must be 1–64 characters without whitespace")
+		return
+	case errors.Is(err, ErrUsernameTaken):
+		apix.Fail(c, http.StatusConflict, "username_taken", "username is already taken")
+		return
+	case err != nil:
+		apix.FailInternal(c)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"username": username})
+}
+
+type changeAccountRequest struct {
+	Username        *string `json:"username"`
+	CurrentPassword string  `json:"currentPassword" binding:"required"`
+	NewPassword     *string `json:"newPassword" binding:"omitempty,min=8,max=72"`
+}
+
+func (h *Handler) changeAccount(c *gin.Context) {
+	adminID, ok := apix.AdminID(c)
+	if !ok {
+		apix.Fail(c, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	var req changeAccountRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "currentPassword is required, username must be 1–64 characters without whitespace, newPassword 8–72 characters")
+		return
+	}
+	username, err := h.svc.ChangeAccount(c.Request.Context(), adminID, req.CurrentPassword, req.Username, req.NewPassword)
+	switch {
+	case errors.Is(err, ErrWrongPassword):
+		apix.Fail(c, http.StatusBadRequest, "wrong_password", "current password is incorrect")
+		return
+	case errors.Is(err, ErrInvalidUsername):
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "username must be 1–64 characters without whitespace")
+		return
+	case errors.Is(err, ErrUsernameTaken):
+		apix.Fail(c, http.StatusConflict, "username_taken", "username is already taken")
+		return
+	case errors.Is(err, ErrInvalidPassword):
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "newPassword must be 8–72 characters")
+		return
+	case err != nil:
+		apix.FailInternal(c)
+		return
+	}
+	// A password change inside the combined update revokes other
+	// sessions, exactly like the dedicated password endpoint.
+	if req.NewPassword != nil && *req.NewPassword != "" {
+		if token, err := c.Cookie(CookieName); err == nil && token != "" {
+			_, _ = h.svc.RevokeOtherSessions(c.Request.Context(), adminID, SessionHash(token))
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"username": username})
+}
+
+func (h *Handler) revokeOtherSessions(c *gin.Context) {
+	adminID, ok := apix.AdminID(c)
+	if !ok {
+		apix.Fail(c, http.StatusUnauthorized, "unauthorized", "authentication required")
+		return
+	}
+	except := ""
+	if token, err := c.Cookie(CookieName); err == nil && token != "" {
+		except = SessionHash(token)
+	}
+	n, err := h.svc.RevokeOtherSessions(c.Request.Context(), adminID, except)
+	if err != nil {
+		apix.FailInternal(c)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"revoked": n})
 }

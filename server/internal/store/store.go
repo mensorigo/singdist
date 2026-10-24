@@ -178,6 +178,24 @@ func (s *Store) UpdateAdminPassword(ctx context.Context, id int64, passwordHash 
 	return nil
 }
 
+// UpdateAdminUsername renames an admin. Sessions are bound to the admin
+// id, not the username, so a rename never invalidates live sessions.
+func (s *Store) UpdateAdminUsername(ctx context.Context, id int64, username string, now int64) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE admins SET username = ?, updated_at = ? WHERE id = ?`, username, now, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // --- sessions ---------------------------------------------------------------
 
 // CreateSession stores a session by its token hash.
@@ -206,6 +224,19 @@ func (s *Store) SessionAdmin(ctx context.Context, tokenHash string) (int64, int6
 func (s *Store) DeleteSession(ctx context.Context, tokenHash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash = ?`, tokenHash)
 	return err
+}
+
+// DeleteOtherSessions removes every session of an admin except the one
+// identified by exceptTokenHash, and returns how many were removed.
+// Used after a password change and by the explicit "sign out other
+// devices" action; the current session always survives.
+func (s *Store) DeleteOtherSessions(ctx context.Context, adminID int64, exceptTokenHash string) (int64, error) {
+	res, err := s.db.ExecContext(ctx,
+		`DELETE FROM sessions WHERE admin_id = ? AND token_hash != ?`, adminID, exceptTokenHash)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 // DeleteExpiredSessions removes sessions whose expiry has passed.
