@@ -18,7 +18,14 @@ interface Props {
 }
 
 export default function LoginPage({ onLogin }: Props) {
-  const [username, setUsername] = useState("singbox-ui");
+  // Remember the last login username in this browser only: the
+  // login page is unauthenticated, so it must never ask the server
+  // for the current admin name (that would leak it to visitors).
+  // A hardcoded default would go stale the moment the admin renames
+  // their account, which is exactly what happened with "singbox-ui".
+  const [username, setUsername] = useState(
+    () => localStorage.getItem("singbox-ui-username") ?? "",
+  );
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -29,6 +36,7 @@ export default function LoginPage({ onLogin }: Props) {
     setBusy(true);
     try {
       const res = await api.login(username.trim(), password);
+      localStorage.setItem("singbox-ui-username", res.username);
       onLogin(res.username);
     } catch (err) {
       if (err instanceof ApiError) {

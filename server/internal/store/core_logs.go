@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"net"
 	"strings"
 	"time"
 )
@@ -177,4 +178,43 @@ func (s *Store) CoreLogsUsedBytes(ctx context.Context) (int64, error) {
 		used = 0
 	}
 	return used, nil
+}
+
+// OnlineIPs returns, per log user name, the set of distinct source IPs
+// with a connection record at or after sinceMs. Source is "ip:port"
+// (Go Addr.String form, so IPv6 arrives bracketed); the port is
+// stripped, and an unparseable source counts as-is rather than being
+// dropped. Rows with an empty user (e.g. shadowsocks, which has no
+// per-user field) cannot be attributed and are skipped.
+func (s *Store) OnlineIPs(ctx context.Context, sinceMs int64) (map[string]map[string]struct{}, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT user, source FROM core_logs WHERE kind = 'connection' AND ts >= ?`, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]map[string]struct{}{}
+	for rows.Next() {
+		var user, source string
+		if err := rows.Scan(&user, &source); err != nil {
+			return nil, err
+		}
+		if user == "" || source == "" {
+			continue
+		}
+		ip := source
+		if host, _, err := net.SplitHostPort(source); err == nil {
+			ip = host
+		}
+		m := out[user]
+		if m == nil {
+			m = map[string]struct{}{}
+			out[user] = m
+		}
+		m[ip] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }

@@ -556,7 +556,10 @@ function InboundFormDialog({
           downMbps,
           password: password.trim(),
           obfs,
-          obfsPassword: obfs === "salamander" ? obfsPassword.trim() : "",
+          // Unknown obfs values keep their password: only an explicit
+          // "none" clears it, so an unrecognized value is never
+          // silently destroyed by saving the form.
+          obfsPassword: obfs === "" ? "" : obfsPassword.trim(),
         } as Hy2Params;
       case "tuic":
         return {
@@ -817,6 +820,15 @@ function InboundFormDialog({
                     <SelectContent>
                       <SelectItem value="none">无</SelectItem>
                       <SelectItem value="salamander">salamander</SelectItem>
+                      {/* Defensive: a row whose obfs is outside the
+                      options (legacy/future value) shows its raw
+                      value instead of a blank Select, and saving
+                      without touching it preserves it. */}
+                      {obfs !== "" && obfs !== "salamander" && (
+                        <SelectItem value={obfs}>
+                          {obfs}（未知值，保存后保留）
+                        </SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
@@ -889,6 +901,16 @@ function InboundFormDialog({
                       <SelectItem value="bbr">BBR（推荐）</SelectItem>
                       <SelectItem value="cubic">Cubic</SelectItem>
                       <SelectItem value="new_reno">New Reno</SelectItem>
+                      {/* Defensive: same unknown-value safeguard as
+                      obfs above — show the raw value, preserve it
+                      on save unless the user picks another option. */}
+                      {!["bbr", "cubic", "new_reno"].includes(
+                        tuicCongestion,
+                      ) && (
+                        <SelectItem value={tuicCongestion}>
+                          {tuicCongestion}（未知值，保存后保留）
+                        </SelectItem>
+                      )}
                     </SelectContent>
                   </Select>
                 </div>

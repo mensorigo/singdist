@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Globe, Share2, Shield, Type } from "lucide-react";
+import { ArrowDownUp, Globe, Share2, Shield, Type } from "lucide-react";
 import { toast } from "sonner";
 
 import { EnabledSwitch } from "@/components/enabled-switch";
@@ -16,6 +16,7 @@ import {
   ApiError,
   type SettingsUpdate,
   type SettingsView,
+  type SyncStatus,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -133,6 +134,11 @@ function Row({
   );
 }
 
+function fmtSyncTime(unix: number): string {
+  if (!unix) return "—";
+  return new Date(unix * 1000).toLocaleString("zh-CN", { hour12: false });
+}
+
 export default function SettingsPage({
   refreshSignal,
 }: {
@@ -147,6 +153,9 @@ export default function SettingsPage({
   const [nodeNameDraft, setNodeNameDraft] = useState("");
   const [publicHostDraft, setPublicHostDraft] = useState("");
   const [intervalDraft, setIntervalDraft] = useState("24");
+  const [dashDraft, setDashDraft] = useState("3");
+  const [syncIntervalDraft, setSyncIntervalDraft] = useState("600");
+  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -171,8 +180,30 @@ export default function SettingsPage({
       setNodeNameDraft(settings.nodeName);
       setPublicHostDraft(settings.publicHost);
       setIntervalDraft(String(settings.updateIntervalHours));
+      setDashDraft(String(settings.dashIntervalSecs));
+      setSyncIntervalDraft(String(settings.autoSyncIntervalSecs));
     }
   }, [settings]);
+
+  // Sync status for the 同步 card: the same 30s poll the top-bar
+  // control used, so the card's "last sync" line tracks auto-sync ticks.
+  useEffect(() => {
+    let cancelled = false;
+    const loadSyncStatus = async () => {
+      try {
+        const s = await api.sync.status();
+        if (!cancelled) setSyncStatus(s);
+      } catch {
+        /* status line keeps its previous value */
+      }
+    };
+    void loadSyncStatus();
+    const timer = setInterval(loadSyncStatus, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [refreshSignal]);
 
   // Instant save: apply optimistically, persist, revert on failure.
   const apply = (patch: SettingsUpdate) => {
@@ -216,8 +247,83 @@ export default function SettingsPage({
     }
   };
 
+  const commitDashInterval = () => {
+    const n = Number(dashDraft);
+    if (!Number.isInteger(n) || n < 1 || n > 60) {
+      toast.error("数据刷新频率需为 1–60 的整数（秒）");
+      setDashDraft(String(settings.dashIntervalSecs));
+      return;
+    }
+    if (n !== settings.dashIntervalSecs) {
+      apply({ dashIntervalSecs: n });
+    }
+  };
+
+  const commitSyncInterval = () => {
+    const n = Number(syncIntervalDraft);
+    if (!Number.isInteger(n) || n < 0 || n > 3600) {
+      toast.error("同步间隔需为 0–3600 的整数（秒）");
+      setSyncIntervalDraft(String(settings.autoSyncIntervalSecs));
+      return;
+    }
+    if (n !== settings.autoSyncIntervalSecs) {
+      apply({ autoSyncIntervalSecs: n });
+    }
+  };
+
   return (
     <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2">
+        <SettingCard
+          icon={<Shield className="h-[18px] w-[18px]" />}
+          title="WebRTC / STUN"
+          desc="STUN 打洞流量的走向。"
+        >
+          <Segmented
+            value={settings.webrtcMode}
+            disabled={saving}
+            onChange={(v) => apply({ webrtcMode: v })}
+            options={[
+              { value: "proxy", label: "走代理" },
+              { value: "reject", label: "拒绝" },
+              { value: "off", label: "关闭" },
+            ]}
+          />
+        </SettingCard>
+
+        <SettingCard
+          icon={<Globe className="h-[18px] w-[18px]" />}
+          title="DNS"
+          desc="订阅 DNS 的兜底解析。"
+        >
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span className="text-sm">兜底解析</span>
+              <Segmented
+                value={settings.dnsFallback}
+                disabled={saving}
+                onChange={(v) => apply({ dnsFallback: v })}
+                options={[
+                  { value: "foreign", label: "国外（Cloudflare / Google）" },
+                  { value: "domestic", label: "国内（阿里 / 腾讯）" },
+                ]}
+              />
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-sm">respect-rules</span>
+              <EnabledSwitch
+                enabled={settings.dnsRespectRules}
+                disabled={saving}
+                onToggle={() =>
+                  apply({ dnsRespectRules: !settings.dnsRespectRules })
+                }
+              />
+            </div>
+          </div>
+        </SettingCard>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
       <SettingCard
         icon={<Share2 className="h-[18px] w-[18px]" />}
         title="订阅分发"
@@ -348,58 +454,69 @@ export default function SettingsPage({
               }
             />
           </Row>
+          <Row
+            label="数据刷新频率"
+            hint="仪表盘与在线统计的刷新间隔"
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={1}
+                max={60}
+                value={dashDraft}
+                disabled={saving}
+                onChange={(e) => setDashDraft(e.target.value)}
+                onBlur={commitDashInterval}
+                className="w-24"
+              />
+              <span className="text-sm text-muted-foreground">秒</span>
+            </div>
+          </Row>
         </div>
       </SettingCard>
+      </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <SettingCard
-          icon={<Shield className="h-[18px] w-[18px]" />}
-          title="WebRTC / STUN"
-          desc="STUN 打洞流量的走向。"
-        >
-          <Segmented
-            value={settings.webrtcMode}
-            disabled={saving}
-            onChange={(v) => apply({ webrtcMode: v })}
-            options={[
-              { value: "proxy", label: "走代理" },
-              { value: "reject", label: "拒绝" },
-              { value: "off", label: "关闭" },
-            ]}
-          />
-        </SettingCard>
-
-        <SettingCard
-          icon={<Globe className="h-[18px] w-[18px]" />}
-          title="DNS"
-          desc="订阅 DNS 的兜底解析。"
-        >
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-sm">兜底解析</span>
-              <Segmented
-                value={settings.dnsFallback}
-                disabled={saving}
-                onChange={(v) => apply({ dnsFallback: v })}
-                options={[
-                  { value: "foreign", label: "国外（Cloudflare / Google）" },
-                  { value: "domestic", label: "国内（阿里 / 腾讯）" },
-                ]}
-              />
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-sm">respect-rules</span>
+      <SettingCard
+        icon={<ArrowDownUp className="h-[18px] w-[18px]" />}
+        title="同步"
+        desc="核心配置的自动同步；顶栏同步按钮已隐藏，同步全部由这里控制。"
+      >
+        <>
+          <div className="divide-y">
+            <Row label="自动同步核心" hint="关闭后不再自动同步">
               <EnabledSwitch
-                enabled={settings.dnsRespectRules}
+                enabled={settings.autoSyncEnabled}
                 disabled={saving}
                 onToggle={() =>
-                  apply({ dnsRespectRules: !settings.dnsRespectRules })
+                  apply({ autoSyncEnabled: !settings.autoSyncEnabled })
                 }
               />
-            </div>
+            </Row>
+            <Row label="同步间隔" hint="0 = 每次修改后自动同步；大于 0 = 到期自动同步">
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  max={3600}
+                  value={syncIntervalDraft}
+                  disabled={saving || !settings.autoSyncEnabled}
+                  onChange={(e) => setSyncIntervalDraft(e.target.value)}
+                  onBlur={commitSyncInterval}
+                  className="w-24"
+                />
+                <span className="text-sm text-muted-foreground">秒</span>
+              </div>
+            </Row>
           </div>
-        </SettingCard>
-      </div>
+          <p className="mt-4 text-xs text-muted-foreground">
+            {syncStatus === null
+              ? "同步状态加载中…"
+              : syncStatus.inSync
+                ? `已同步${syncStatus.last ? ` · 上次同步 ${fmtSyncTime(syncStatus.last.at)}` : " · 尚未同步过"}`
+                : `有变更待同步${syncStatus.last ? ` · 上次同步 ${fmtSyncTime(syncStatus.last.at)}` : " · 尚未同步过"}`}
+          </p>
+        </>
+      </SettingCard>
 
       <p className="text-xs text-muted-foreground">
         这些选项保存后即时生效。

@@ -1,4 +1,10 @@
-import { ClipboardPaste, TriangleAlert, Upload } from "lucide-react";
+import {
+  ArrowLeftRight,
+  ClipboardPaste,
+  Trash,
+  TriangleAlert,
+  Upload,
+} from "lucide-react";
 import {
   useCallback,
   useEffect,
@@ -346,19 +352,26 @@ export default function CertificatesPage({
                     {!v.active && (
                       <div className="flex items-center gap-3">
                         <Button
+                          size="icon"
+                          variant="ghost"
+                          title="启用"
+                          aria-label="启用"
                           disabled={busyId === v.id}
                           onClick={() => void handleActivate(v)}
-                          className="h-8 rounded-xl px-3"
+                          className="h-8 w-8"
                         >
-                          启用
+                          <ArrowLeftRight className="h-4 w-4" />
                         </Button>
                         <Button
-                          variant="destructive"
+                          size="icon"
+                          variant="ghost"
+                          title="删除"
+                          aria-label="删除"
                           disabled={busyId === v.id}
                           onClick={() => handleDelete(v)}
-                          className="h-8 rounded-xl px-3"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
                         >
-                          删除
+                          <Trash className="h-4 w-4" />
                         </Button>
                       </div>
                     )}

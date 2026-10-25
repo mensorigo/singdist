@@ -35,11 +35,12 @@ func (h *Handler) update(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be a JSON settings patch")
 		return
 	}
-	v, err := h.svc.Update(c.Request.Context(), req)
+	v, summary, err := h.svc.Update(c.Request.Context(), req)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
+	c.Set("auditSummary", summary)
 	c.JSON(http.StatusOK, v)
 }
 

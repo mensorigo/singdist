@@ -47,6 +47,7 @@ const CATEGORIES: { value: LogCategory; label: string }[] = [
   { value: "core", label: "核心" },
   { value: "panel", label: "面板操作" },
   { value: "connection", label: "客户端连接" },
+  { value: "config", label: "配置更改" },
 ];
 
 const LEVELS = [
@@ -76,10 +77,20 @@ export default function LogsPage({
 
   const [entries, setEntries] = useState<LogEntry[]>([]);
   const [nextBefore, setNextBefore] = useState("");
-  const [paged, setPaged] = useState(false);
+  // Buffered rows: fetched ahead (2 pages, ~200 rows) but not yet
+  // rendered. Scrolling moves them into entries; the background then
+  // refills the buffer, so scrolling never waits on the network.
+  const [buffer, setBuffer] = useState<LogEntry[]>([]);
+  const [bufferNextBefore, setBufferNextBefore] = useState("");
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  // atTop tracks whether the viewport sits at the newest end (top).
+  // The 10s live tail only runs while atTop; scrolling into history
+  // pauses it so a refresh never yanks the viewport back.
+  const [atTop, setAtTop] = useState(true);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const atTopRef = useRef(true);
+  const fetchingRef = useRef(false);
   // Sequence guard: a slow response from a superseded filter/tab must
   // never overwrite newer data. loadedRef tracks whether any page has
   // ever rendered, so a failed background refresh keeps stale rows
@@ -123,11 +134,49 @@ export default function LogsPage({
     [timezone],
   );
 
+  // Fetch `pages` pages ahead of `cursor` into the buffer (silent,
+  // background). A superseded filter/tab discards the result via the
+  // sequence guard, same as loadFresh.
+  const prefetch = useCallback(
+    async (cursor: string, pages: number) => {
+      if (!cursor || pages <= 0) return;
+      if (fetchingRef.current) return;
+      fetchingRef.current = true;
+      const seq = seqRef.current;
+      let cur = cursor;
+      const acc: LogEntry[] = [];
+      try {
+        for (let i = 0; i < pages && cur; i++) {
+          const page = await api.logs({
+            category,
+            q: keyword || undefined,
+            level: category === "core" ? level || undefined : undefined,
+            result: category === "panel" ? result || undefined : undefined,
+            before: cur,
+          });
+          if (seq !== seqRef.current) return;
+          acc.push(...page.entries);
+          cur = page.nextBefore;
+        }
+        if (seq !== seqRef.current) return;
+        if (acc.length > 0) {
+          setBuffer((prev) => [...prev, ...acc]);
+          setBufferNextBefore(cur);
+        }
+      } catch {
+        // Background prefetch failed: stay silent, the next scroll
+        // trigger retries from the same cursor.
+      } finally {
+        fetchingRef.current = false;
+      }
+    },
+    [category, keyword, level, result],
+  );
+
   const loadFresh = useCallback(async () => {
     const seq = ++seqRef.current;
     setLoading(true);
     setLoadError(null);
-    setPaged(false);
     try {
       const page = await api.logs({
         category,
@@ -139,6 +188,11 @@ export default function LogsPage({
       setEntries(page.entries);
       setNextBefore(page.nextBefore);
       loadedRef.current = true;
+      // Fresh list, fresh buffer: refill the 2-page (~200-row) buffer
+      // behind the new first page so scrolling never waits.
+      setBuffer([]);
+      setBufferNextBefore("");
+      void prefetch(page.nextBefore, 2);
     } catch (err) {
       if (seq !== seqRef.current) return;
       if (err instanceof ApiError && err.status === 401) {
@@ -160,52 +214,101 @@ export default function LogsPage({
     } finally {
       if (seq === seqRef.current) setLoading(false);
     }
-  }, [category, keyword, level, result]);
+  }, [category, keyword, level, result, prefetch]);
 
-  // Fresh load on filter change and on top-bar refresh.
+  // Fresh load on filter change and on top-bar refresh. A manual
+  // refresh returns the viewport to the newest end first.
   useEffect(() => {
+    containerRef.current?.scrollTo({ top: 0 });
     void loadFresh();
   }, [loadFresh, refreshSignal]);
 
-  // Live tail: refresh the latest page every 10s unless the user has
-  // paged into older history. Latest-page reads are served from the
-  // server's in-memory tail, so this poll stays cheap.
+  // Live tail: refresh the latest page every 10s, but ONLY while the
+  // viewport sits at the newest end. Scrolling into history pauses
+  // it, so a refresh never yanks the viewport back to the top.
+  // Latest-page reads are served from the server's in-memory tail,
+  // so this poll stays cheap.
   useEffect(() => {
-    if (paged) return;
+    if (!atTop) return;
     const id = window.setInterval(() => {
       void loadFresh();
     }, 10000);
     return () => window.clearInterval(id);
-  }, [loadFresh, paged]);
+  }, [loadFresh, atTop]);
+
+  // Returning to the top resumes live data immediately (not just on
+  // the next 10s tick): the newest page loads at once.
+  const prevAtTopRef = useRef(true);
+  useEffect(() => {
+    if (atTop && !prevAtTopRef.current) void loadFresh();
+    prevAtTopRef.current = atTop;
+  }, [atTop, loadFresh]);
 
   const applySearch = () => {
     setKeyword(draft.trim());
   };
 
-  const loadMore = async () => {
-    if (!nextBefore || loadingMore) return;
-    const seq = seqRef.current;
-    setLoadingMore(true);
-    try {
-      const page = await api.logs({
-        category,
-        q: keyword || undefined,
-        level: category === "core" ? level || undefined : undefined,
-        result: category === "panel" ? result || undefined : undefined,
-        before: nextBefore,
-      });
-      if (seq !== seqRef.current) return;
-      setEntries((prev) => [...prev, ...page.entries]);
-      setNextBefore(page.nextBefore);
-      setPaged(true);
-    } catch (err) {
-      toast.error(
-        err instanceof ApiError ? err.message : "加载更多失败，请重试",
-      );
-    } finally {
-      setLoadingMore(false);
+  // Move the buffered rows into the rendered list and refill the
+  // buffer behind them. Rendered rows only ever grow (append-only);
+  // the buffer is what keeps scrolling wait-free.
+  const consumeBuffer = useCallback(() => {
+    if (buffer.length === 0) return;
+    const cursor = bufferNextBefore;
+    setEntries((prev) => [...prev, ...buffer]);
+    setBuffer([]);
+    setBufferNextBefore("");
+    setNextBefore(cursor);
+    if (cursor) void prefetch(cursor, 2);
+  }, [buffer, bufferNextBefore, prefetch]);
+
+  const handleScroll = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const top = el.scrollTop <= 40;
+    if (top !== atTopRef.current) {
+      atTopRef.current = top;
+      setAtTop(top);
     }
-  };
+    if (el.scrollTop + el.clientHeight < el.scrollHeight - 300) return;
+    if (buffer.length > 0) {
+      consumeBuffer();
+      return;
+    }
+    if (!nextBefore || fetchingRef.current) return;
+    // Buffer empty (prefetch failed or not yet run): fetch the next
+    // page directly into entries, then prefetch ahead.
+    fetchingRef.current = true;
+    const seq = seqRef.current;
+    const cur = nextBefore;
+    void (async () => {
+      try {
+        const page = await api.logs({
+          category,
+          q: keyword || undefined,
+          level: category === "core" ? level || undefined : undefined,
+          result: category === "panel" ? result || undefined : undefined,
+          before: cur,
+        });
+        if (seq !== seqRef.current) return;
+        setEntries((prev) => [...prev, ...page.entries]);
+        setNextBefore(page.nextBefore);
+        fetchingRef.current = false;
+        if (page.nextBefore) void prefetch(page.nextBefore, 2);
+      } catch {
+        fetchingRef.current = false;
+        // Silent: the next scroll trigger retries.
+      }
+    })();
+  }, [
+    buffer,
+    nextBefore,
+    category,
+    keyword,
+    level,
+    result,
+    consumeBuffer,
+    prefetch,
+  ]);
 
   // Rows: clock + level/result label + message. The level/result is
   // also shown as a left-border accent (error/failed) or row weight,
@@ -240,6 +343,54 @@ export default function LogsPage({
             {e.action}
             {e.target ? ` ${e.target}` : ""}
             {failed && e.detail ? `（${e.detail}）` : ""}
+            {e.ip && (
+              <span className="text-muted-foreground"> [{e.ip}]</span>
+            )}
+            {e.summary && (
+              <span className="text-muted-foreground"> {e.summary}</span>
+            )}
+            {e.applied_hash === "" ? (
+              <span className="text-muted-foreground"> 待同步</span>
+            ) : e.applied_hash ? (
+              <span className="text-muted-foreground">
+                {" "}
+                已应用 {e.applied_hash.slice(0, 8)}
+              </span>
+            ) : null}
+          </span>
+        </li>
+      );
+    }
+    if (e.category === "config") {
+      // One row is one field-level change a sync made from the file:
+      // action label + item + old→new + the reason, muted. Illegal
+      // drops get the same accent as a failed panel row.
+      const dropped = e.action === "非法丢弃";
+      return (
+        <li
+          key={key}
+          className={cn(
+            "flex gap-2 border-l-2 border-transparent px-4 py-px",
+            dropped && "border-foreground font-semibold",
+          )}
+        >
+          {time}
+          <span
+            className={cn(
+              "w-16 shrink-0 tabular-nums",
+              dropped ? "text-foreground" : "text-muted-foreground",
+            )}
+          >
+            {e.action}
+          </span>
+          <span className="min-w-0 flex-1 font-normal whitespace-pre-wrap break-all">
+            {e.target}
+            {e.summary && (
+              <span className="text-muted-foreground"> {e.summary}</span>
+            )}
+            {e.detail && (
+              <span className="text-muted-foreground">（{e.detail}）</span>
+            )}
           </span>
         </li>
       );
@@ -318,6 +469,8 @@ export default function LogsPage({
             // placeholder shows until the new page arrives.
             setEntries([]);
             setNextBefore("");
+            setBuffer([]);
+            setBufferNextBefore("");
             loadedRef.current = false;
             setCategory(v);
             setDraft("");
@@ -357,7 +510,10 @@ export default function LogsPage({
           type="button"
           variant="outline"
           size="sm"
-          onClick={() => void loadFresh()}
+          onClick={() => {
+            containerRef.current?.scrollTo({ top: 0 });
+            void loadFresh();
+          }}
           disabled={loading}
         >
           <RefreshCw
@@ -368,14 +524,26 @@ export default function LogsPage({
       </div>
       <p className="text-xs text-muted-foreground">
         核心与客户端连接来自 sing-box 运行日志；面板操作记录所有面板变更与结果，保留
-        90 天。
+        90 天；配置更改记录每次同步时文件对面板的改动、透传与丢弃。
       </p>
       {/* One big container for the logs, old-panel style: monospace,
       dense lines, scrollable. Lines stay selectable: copying IPs and
       domains is the point. */}
       <div className="relative">
         <div className="rounded-xl border bg-card text-card-foreground shadow-sm">
-          <div className="select-text max-h-[70vh] overflow-auto py-3 font-mono text-xs leading-5">
+          <div
+            ref={containerRef}
+            tabIndex={0}
+            onScroll={handleScroll}
+            onKeyDown={(e) => {
+              // Focused log window + Enter: back to the newest end.
+              if (e.key === "Enter") {
+                containerRef.current?.scrollTo({ top: 0 });
+                void loadFresh();
+              }
+            }}
+            className="select-text max-h-[70vh] overflow-auto py-3 font-mono text-xs leading-5 outline-none"
+          >
             {entries.length === 0 ? (
               loading ? (
                 <p className="px-4 py-8 text-center font-sans text-muted-foreground">
@@ -398,22 +566,6 @@ export default function LogsPage({
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <span>共 {entries.length} 行</span>
-        {nextBefore ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => void loadMore()}
-            disabled={loadingMore}
-          >
-            {loadingMore ? "加载中…" : "加载更多"}
-          </Button>
-        ) : (
-          entries.length > 0 && <span>没有更多日志</span>
-        )}
-      </div>
     </div>
   );
 }

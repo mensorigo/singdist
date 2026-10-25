@@ -5,12 +5,11 @@ import {
   Copy,
   Ellipsis,
   Eye,
-  FingerprintPattern,
   Link2,
-  Network,
   Pencil,
   Power,
   QrCode,
+  RefreshCw,
   Trash,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -51,8 +50,8 @@ import { cn } from "@/lib/utils";
 const ICON_BTN_CLS =
   "flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 
-// Lifecycle pill + online pill, old-panel style. The online pill is a
-// placeholder until the realtime-connections phase feeds it.
+// Lifecycle pill only (user decision 2026-10-25: no online-status pill;
+// subscription enabled state is the only status shown).
 function StatusPills({ v }: { v: SubscriptionView }) {
   const life = {
     active: ["启用中", "text-emerald-600 dark:text-emerald-400", "bg-emerald-500"],
@@ -71,12 +70,167 @@ function StatusPills({ v }: { v: SubscriptionView }) {
         <span className={cn("h-1.5 w-1.5 rounded-full", life[2])} />
         {life[0]}
       </span>
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />
-        离线
+    </div>
+  );
+}
+
+// Copy + QR + dropdown, shared by the table row and the card: one
+// source so the two layouts can never drift apart in behaviour.
+function RowActions({
+  v,
+  onCopyLink,
+  onQr,
+  onEdit,
+  onResetLink,
+  onResetAll,
+  onToggleEnabled,
+  onDelete,
+}: {
+  v: SubscriptionView;
+  onCopyLink: () => void;
+  onQr: () => void;
+  onEdit: () => void;
+  onResetLink: () => void;
+  onResetAll: () => void;
+  onToggleEnabled: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        title="复制订阅链接"
+        aria-label="复制订阅链接"
+        onClick={onCopyLink}
+        className={ICON_BTN_CLS}
+      >
+        <Copy className="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        title="二维码"
+        aria-label="二维码"
+        onClick={onQr}
+        className={ICON_BTN_CLS}
+      >
+        <QrCode className="h-4 w-4" />
+      </button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            title="更多操作"
+            aria-label="更多操作"
+            className={ICON_BTN_CLS}
+          >
+            <Ellipsis className="h-4 w-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-32">
+          <DropdownMenuItem className="text-[13px]" onClick={onEdit}>
+            <Pencil className="mr-1.5 h-4 w-4" />
+            编辑
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-[13px]" onClick={onResetLink}>
+            <Link2 className="mr-1.5 h-4 w-4" />
+            更换链接
+          </DropdownMenuItem>
+          <DropdownMenuItem className="text-[13px]" onClick={onResetAll}>
+            <RefreshCw className="mr-1.5 h-4 w-4" />
+            重置链接
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem className="text-[13px]" onClick={onToggleEnabled}>
+            <Power className="mr-1.5 h-4 w-4" />
+            {v.enabled ? "停用" : "启用"}
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            className="text-[13px] text-destructive focus:text-destructive"
+            onClick={onDelete}
+          >
+            <Trash className="mr-1.5 h-4 w-4" />
+            删除
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+// Traffic bar + text, shared by both layouts: the percentage math lives
+// here, so the templates only arrange pieces. barClassName is layout
+// (table: fixed narrow bar; card: bar grows to fill the row).
+function TrafficMeter({
+  v,
+  barClassName = "h-1.5 w-28",
+}: {
+  v: SubscriptionView;
+  barClassName?: string;
+}) {
+  const pct =
+    v.limitBytes > 0
+      ? Math.min(100, (v.usedBytes / v.limitBytes) * 100)
+      : 0;
+  return (
+    <div className="flex items-center gap-3">
+      <div
+        className={cn(
+          "shrink-0 overflow-hidden rounded-full bg-muted",
+          barClassName,
+        )}
+      >
+        {v.limitBytes > 0 && pct > 0 && (
+          <div
+            className="h-full rounded-full bg-foreground/50"
+            style={{ width: `${pct}%` }}
+          />
+        )}
+      </div>
+      <span className="whitespace-nowrap tabular-nums text-[13px] text-muted-foreground">
+        {fmtBytes2(v.usedBytes)} /{" "}
+        {v.limitBytes > 0
+          ? `${fmtBytes2(v.limitBytes)} · ${pct.toFixed(1)}%`
+          : "不限"}
       </span>
     </div>
   );
+}
+
+// Truncated mono UUID, tap to copy — same in both layouts.
+function UuidCopy({ v }: { v: SubscriptionView }) {
+  return (
+    <button
+      type="button"
+      title={`${v.uuid}（点击复制）`}
+      onClick={() => void copyText(v.uuid, "UUID 已复制")}
+      className="min-w-0 truncate font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+    >
+      {v.uuid.slice(0, 19)}…
+    </button>
+  );
+}
+
+// Days left until expiry, by calendar date (expireAt is end-of-day):
+// "" = never expires; "今天到期" / "剩 X 天" / "已过期 X 天".
+function expiryCountdown(expireAt: number): string {
+  if (expireAt <= 0) return "";
+  const day = 86400000;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const exp = new Date(expireAt * 1000);
+  exp.setHours(0, 0, 0, 0);
+  const diff = Math.round((exp.getTime() - today.getTime()) / day);
+  if (diff < 0) return `已过期 ${-diff} 天`;
+  if (diff === 0) return "今天到期";
+  return `剩 ${diff} 天`;
+}
+
+// Template name + inbound count for a subscription; falls back to the
+// view's template name when the template row is missing.
+function templateOf(v: SubscriptionView, templates: TemplateView[]) {
+  const t = templates.find((t) => t.id === v.templateId);
+  if (t) return { name: t.name, inboundCount: t.inboundIds.length };
+  return { name: v.templateName || "—", inboundCount: null as number | null };
 }
 
 function fmtDate(unix: number): string {
@@ -151,10 +305,21 @@ export default function SubscriptionsPage({
   const [qrSub, setQrSub] = useState<SubscriptionView | null>(null);
   const [pendingDeleteSub, setPendingDeleteSub] =
     useState<SubscriptionView | null>(null);
-  const [pendingResetUuid, setPendingResetUuid] =
+  const [pendingResetAll, setPendingResetAll] =
     useState<SubscriptionView | null>(null);
   const [pendingResetLink, setPendingResetLink] =
     useState<SubscriptionView | null>(null);
+
+  // List vs card layout, remembered per browser (same pattern as the
+  // sidebar collapse). Default is the existing table: the card view is
+  // opt-in, so nothing changes for anyone who never toggles.
+  const [view, setView] = useState<"list" | "card">(() =>
+    localStorage.getItem("singbox-ui-sub-view") === "card" ? "card" : "list",
+  );
+  const setViewPersist = (next: "list" | "card") => {
+    setView(next);
+    localStorage.setItem("singbox-ui-sub-view", next);
+  };
 
   const refresh = useCallback(async () => {
     try {
@@ -177,6 +342,41 @@ export default function SubscriptionsPage({
   useEffect(() => {
     void refresh();
   }, [refresh, refreshSignal]);
+
+  // Online-IP counts on the dashboard interval timer (default 3s);
+  // failures stay silent so a stats hiccup never blocks the list.
+  const [onlineCounts, setOnlineCounts] = useState<Record<
+    string,
+    number
+  > | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    void (async () => {
+      let intervalMs = 3000;
+      try {
+        const v = await api.settings.get();
+        if (!cancelled) intervalMs = v.dashIntervalSecs * 1000;
+      } catch {
+        /* keep the default interval */
+      }
+      if (cancelled) return;
+      const load = async () => {
+        try {
+          const r = await api.subscriptions.onlineIps();
+          if (!cancelled) setOnlineCounts(r.counts);
+        } catch {
+          /* silent: stats only */
+        }
+      };
+      void load();
+      timer = window.setInterval(load, intervalMs);
+    })();
+    return () => {
+      cancelled = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [refreshSignal]);
 
   const runAction = async (
     id: number,
@@ -207,9 +407,40 @@ export default function SubscriptionsPage({
 
   return (
     <div className="space-y-4">
-      <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
-        <div className="flex items-center justify-between">
+      {/* Positions unchanged: title on the left, view switch +
+          新建订阅 on the right. Only the title gets a small container,
+          and as a direct child of this space-y-4 root its left edge
+          lines up with the list cards below. */}
+      <div className="flex items-center justify-between">
+        <div className="rounded-xl border bg-card px-4 py-2 shadow-sm">
           <p className="text-base font-semibold">订阅列表</p>
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Same segmented control as the Inbounds page's 入站/模板
+              switch: the view choice stays visible instead of hiding
+              behind a single toggle icon. */}
+          <div className="inline-flex rounded-xl bg-muted p-1">
+            {(
+              [
+                ["list", "列表"],
+                ["card", "卡片"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setViewPersist(key)}
+                className={cn(
+                  "h-7 rounded-lg px-3.5 text-sm transition-colors",
+                  view === key
+                    ? "bg-background font-medium shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <Button
             onClick={() => setSubDialog("new")}
             className="h-8 rounded-xl px-3"
@@ -217,15 +448,20 @@ export default function SubscriptionsPage({
             新建订阅
           </Button>
         </div>
-        {actionError && (
-          <p className="mt-2 text-[13px] text-destructive">{actionError}</p>
-        )}
-        <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[860px] text-sm">
+      </div>
+      {actionError && (
+        <p className="text-[13px] text-destructive">{actionError}</p>
+      )}
+      {view === "list" ? (
+        <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full min-w-[980px] text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
                 <th className="py-2 pr-3 font-medium">订阅</th>
+                <th className="py-2 pr-3 font-medium">模板</th>
                 <th className="py-2 pr-3 font-medium">状态</th>
+                <th className="py-2 pr-3 font-medium">在线 IP</th>
                 <th className="py-2 pr-3 font-medium">流量</th>
                 <th className="py-2 pr-3 font-medium">到期</th>
                 <th className="py-2 pr-3 font-medium">UUID</th>
@@ -234,10 +470,8 @@ export default function SubscriptionsPage({
             </thead>
             <tbody>
               {subs.map((v) => {
-                const pct =
-                  v.limitBytes > 0
-                    ? Math.min(100, (v.usedBytes / v.limitBytes) * 100)
-                    : 0;
+                const t = templateOf(v, templates);
+                const cd = expiryCountdown(v.expireAt);
                 return (
                   <tr key={v.id} className="border-b last:border-0">
                     <td
@@ -249,130 +483,64 @@ export default function SubscriptionsPage({
                       {v.name}
                     </td>
                     <td className="py-2.5 pr-3">
+                      <p
+                        className={cn(
+                          !v.enabled && "text-muted-foreground",
+                        )}
+                      >
+                        {t.name}
+                      </p>
+                    </td>
+                    <td className="py-2.5 pr-3">
                       <StatusPills v={v} />
                     </td>
-                    <td className="py-2.5 pr-3">
-                      <div className="flex items-center gap-3">
-                        <div className="h-1.5 w-28 shrink-0 overflow-hidden rounded-full bg-muted">
-                          {v.limitBytes > 0 && pct > 0 && (
-                            <div
-                              className="h-full rounded-full bg-foreground/50"
-                              style={{ width: `${pct}%` }}
-                            />
-                          )}
-                        </div>
-                        <span className="whitespace-nowrap tabular-nums text-[13px] text-muted-foreground">
-                          {fmtBytes2(v.usedBytes)} /{" "}
-                          {v.limitBytes > 0
-                            ? `${fmtBytes2(v.limitBytes)} · ${pct.toFixed(1)}%`
-                            : "不限"}
-                        </span>
-                      </div>
-                    </td>
-                    <td
-                      className={cn(
-                        "py-2.5 pr-3 tabular-nums",
-                        v.expireAt > 0 ? "font-medium" : "text-muted-foreground",
-                      )}
-                    >
-                      {fmtDate(v.expireAt)}
+                    <td className="py-2.5 pr-3 tabular-nums text-muted-foreground">
+                      {onlineCounts?.[v.id] ?? "—"}
                     </td>
                     <td className="py-2.5 pr-3">
-                      <button
-                        type="button"
-                        title={`${v.uuid}（点击复制）`}
-                        onClick={() => void copyText(v.uuid, "UUID 已复制")}
-                        className="font-mono text-xs text-muted-foreground transition-colors hover:text-foreground"
+                      <TrafficMeter v={v} />
+                    </td>
+                    <td className="py-2.5 pr-3 tabular-nums">
+                      <p
+                        className={cn(
+                          v.expireAt > 0
+                            ? "font-medium"
+                            : "text-muted-foreground",
+                        )}
                       >
-                        {v.uuid.slice(0, 19)}…
-                      </button>
+                        {fmtDate(v.expireAt)}
+                      </p>
+                      {cd && (
+                        <p className="text-xs text-muted-foreground">{cd}</p>
+                      )}
+                    </td>
+                    <td className="py-2.5 pr-3">
+                      <UuidCopy v={v} />
                     </td>
                     <td className="py-2.5">
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          title="复制订阅链接"
-                          aria-label="复制订阅链接"
-                          onClick={() =>
+                      <div className="flex items-center justify-end">
+                        <RowActions
+                          v={v}
+                          onCopyLink={() =>
                             void copyText(subLink(v), "订阅链接已复制")
                           }
-                          className={ICON_BTN_CLS}
-                        >
-                          <Copy className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          title="二维码"
-                          aria-label="二维码"
-                          onClick={() => setQrSub(v)}
-                          className={ICON_BTN_CLS}
-                        >
-                          <QrCode className="h-4 w-4" />
-                        </button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button
-                              type="button"
-                              title="更多操作"
-                              aria-label="更多操作"
-                              className={ICON_BTN_CLS}
-                            >
-                              <Ellipsis className="h-4 w-4" />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="w-32">
-                            <DropdownMenuItem
-                              className="text-[13px]"
-                              onClick={() => setSubDialog(v)}
-                            >
-                              <Pencil className="mr-1.5 h-4 w-4" />
-                              编辑
-                            </DropdownMenuItem>
-                            <DropdownMenuItem disabled className="text-[13px]">
-                              <Network className="mr-1.5 h-4 w-4" />
-                              IP 记录
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-[13px]"
-                              onClick={() => setPendingResetLink(v)}
-                            >
-                              <Link2 className="mr-1.5 h-4 w-4" />
-                              转换链接
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-[13px]"
-                              onClick={() => setPendingResetUuid(v)}
-                            >
-                              <FingerprintPattern className="mr-1.5 h-4 w-4" />
-                              转换UUID
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="text-[13px]"
-                              onClick={() =>
-                                void runAction(
+                          onQr={() => setQrSub(v)}
+                          onEdit={() => setSubDialog(v)}
+                          onResetLink={() => setPendingResetLink(v)}
+                          onResetAll={() => setPendingResetAll(v)}
+                          onToggleEnabled={() =>
+                            void runAction(
+                              v.id,
+                              () =>
+                                api.subscriptions.setEnabled(
                                   v.id,
-                                  () =>
-                                    api.subscriptions.setEnabled(
-                                      v.id,
-                                      !v.enabled,
-                                    ),
-                                  v.enabled ? "订阅已停用" : "订阅已启用",
-                                )
-                              }
-                            >
-                              <Power className="mr-1.5 h-4 w-4" />
-                              {v.enabled ? "停用" : "启用"}
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              className="text-[13px] text-destructive focus:text-destructive"
-                              onClick={() => setPendingDeleteSub(v)}
-                            >
-                              <Trash className="mr-1.5 h-4 w-4" />
-                              删除
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                                  !v.enabled,
+                                ),
+                              v.enabled ? "订阅已停用" : "订阅已启用",
+                            )
+                          }
+                          onDelete={() => setPendingDeleteSub(v)}
+                        />
                       </div>
                     </td>
                   </tr>
@@ -381,7 +549,7 @@ export default function SubscriptionsPage({
               {subs.length === 0 && (
                 <tr>
                   <td
-                    colSpan={6}
+                    colSpan={8}
                     className="py-6 text-center text-sm text-muted-foreground"
                   >
                     暂无订阅，点右上角「新建订阅」创建
@@ -392,7 +560,85 @@ export default function SubscriptionsPage({
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
+      ) : (
+        // Card template: the same shared pieces, only arranged
+        // differently — small rectangles in a grid (1 col on phones,
+        // 2 on sm, 3 on xl), name + status on top, traffic bar full
+        // width, expiry + UUID on a muted detail line.
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {subs.map((v) => {
+            const t = templateOf(v, templates);
+            const cd = expiryCountdown(v.expireAt);
+            return (
+            <article
+              key={v.id}
+              className={cn(
+                "min-w-0 rounded-2xl border bg-card px-4 py-4 shadow-sm",
+                !v.enabled && "opacity-60",
+              )}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-[16px] font-semibold">
+                    {v.name}
+                  </p>
+                  <div className="mt-1.5">
+                    <StatusPills v={v} />
+                  </div>
+                  <p className="mt-1.5 text-xs tabular-nums text-muted-foreground">
+                    在线 IP {onlineCounts?.[v.id] ?? "—"}
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  <RowActions
+                    v={v}
+                    onCopyLink={() =>
+                      void copyText(subLink(v), "订阅链接已复制")
+                    }
+                    onQr={() => setQrSub(v)}
+                    onEdit={() => setSubDialog(v)}
+                    onResetLink={() => setPendingResetLink(v)}
+                    onResetAll={() => setPendingResetAll(v)}
+                    onToggleEnabled={() =>
+                      void runAction(
+                        v.id,
+                        () =>
+                          api.subscriptions.setEnabled(v.id, !v.enabled),
+                        v.enabled ? "订阅已停用" : "订阅已启用",
+                      )
+                    }
+                    onDelete={() => setPendingDeleteSub(v)}
+                  />
+                </div>
+              </div>
+              <div className="mt-3">
+                <TrafficMeter v={v} barClassName="h-2 flex-1" />
+              </div>
+              <div className="mt-2 text-[13px] text-muted-foreground">
+                {t.name}
+                {t.inboundCount !== null && ` · ${t.inboundCount} 个入站`}
+              </div>
+              <div className="mt-1 flex flex-wrap items-center justify-between gap-3 text-[13px] text-muted-foreground">
+                <span className="tabular-nums">
+                  {v.expireAt > 0
+                    ? `到期 ${fmtDate(v.expireAt)} · ${cd}`
+                    : "永不过期"}
+                </span>
+                <UuidCopy v={v} />
+              </div>
+            </article>
+            );
+          })}
+          {subs.length === 0 && (
+            <p className="col-span-full py-6 text-center text-sm text-muted-foreground">
+              暂无订阅，点右上角「新建订阅」创建
+              {templates.length === 0 &&
+                "（需要先在「入站 → 模板」中新建模板）"}
+            </p>
+          )}
+        </div>
+      )}
 
       {subDialog !== null && (
         <SubscriptionFormDialog
@@ -432,13 +678,13 @@ export default function SubscriptionsPage({
         onOpenChange={(open) => {
           if (!open) setPendingResetLink(null);
         }}
-        title="转换订阅链接"
+        title="更换订阅链接"
         description={
           pendingResetLink
-            ? `确定要转换订阅「${pendingResetLink.name}」的链接吗？旧链接将立即失效，所有已导入的客户端需要换用新链接。`
+            ? `确定要更换订阅「${pendingResetLink.name}」的链接吗？旧链接将立即失效；已导入的客户端可继续连接，但更新订阅需换用新链接。`
             : ""
         }
-        confirmLabel="转换"
+        confirmLabel="更换"
         destructive
         onConfirm={() => {
           if (!pendingResetLink) return;
@@ -447,32 +693,51 @@ export default function SubscriptionsPage({
           void runAction(
             v.id,
             () => api.subscriptions.resetToken(v.id),
-            "链接已转换，旧链接已失效",
+            "链接已更换，旧链接已失效",
           );
         }}
       />
       <ConfirmDialog
-        open={pendingResetUuid !== null}
+        open={pendingResetAll !== null}
         onOpenChange={(open) => {
-          if (!open) setPendingResetUuid(null);
+          if (!open) setPendingResetAll(null);
         }}
-        title="转换 UUID"
+        title="重置订阅链接"
         description={
-          pendingResetUuid
-            ? `确定要为订阅「${pendingResetUuid.name}」生成一个新的 UUID 吗？旧 UUID 将失效；同步到核心后，使用旧配置的客户端将无法连接，需要重新导入订阅。`
+          pendingResetAll
+            ? `确定要重置订阅「${pendingResetAll.name}」吗？将同时更换订阅链接和 UUID，旧链接与旧配置立即失效，所有用户需重新订阅。`
             : undefined
         }
-        confirmLabel="转换"
+        confirmLabel="重置"
         destructive
         onConfirm={() => {
-          if (!pendingResetUuid) return;
-          const v = pendingResetUuid;
-          setPendingResetUuid(null);
-          void runAction(
-            v.id,
-            () => api.subscriptions.resetUuid(v.id),
-            "UUID 已转换",
-          );
+          if (!pendingResetAll) return;
+          const v = pendingResetAll;
+          setPendingResetAll(null);
+          // Sequential on purpose: credential first, then link. A plain
+          // runAction would swallow which half succeeded, so handle the
+          // partial failure explicitly: UUID done + link failed must say
+          // so, because the subscription is then in a half-reset state.
+          void (async () => {
+            setActionError(null);
+            try {
+              await api.subscriptions.resetUuid(v.id);
+            } catch (err) {
+              setActionError(
+                err instanceof ApiError ? err.message : "操作失败，请重试",
+              );
+              return;
+            }
+            try {
+              await api.subscriptions.resetToken(v.id);
+            } catch {
+              await refresh();
+              setActionError("UUID 已更换，链接更换失败，请重试");
+              return;
+            }
+            await refresh();
+            toast.success("链接与 UUID 已全部重置，旧配置已失效");
+          })();
         }}
       />
     </div>
@@ -503,7 +768,6 @@ function SubscriptionFormDialog({
   const [expireDate, setExpireDate] = useState(
     unixToDateInput(item?.expireAt ?? 0),
   );
-  const [maxIps, setMaxIps] = useState(item?.maxIps ?? 0);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -524,7 +788,10 @@ function SubscriptionFormDialog({
         templateId,
         limitBytes: Math.round(limitValue * factor),
         expireAt: dateInputToUnix(expireDate),
-        maxIps,
+        // IP cap removed from the form (feature dropped): keep whatever
+        // the row already has on edit, 0 on create. The backend column
+        // stays but was never enforced, so this changes nothing.
+        maxIps: item?.maxIps ?? 0,
       };
       if (creating) {
         await api.subscriptions.create(body);
@@ -626,20 +893,6 @@ function SubscriptionFormDialog({
               />
             </div>
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="sub-maxips">同时使用 IP 上限（0 = 不限）</Label>
-            <Input
-              id="sub-maxips"
-              type="number"
-              min={0}
-              value={maxIps}
-              onChange={(e) => setMaxIps(Number(e.target.value))}
-              className="w-36"
-            />
-            <p className="text-xs text-muted-foreground">
-              多人共用一个订阅；IP 检测上线后生效。
-            </p>
-          </div>
           {!creating && item && (
             <div className="space-y-2">
               <Label>订阅链接</Label>
@@ -674,7 +927,7 @@ function SubscriptionFormDialog({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                更换链接：列表「···」菜单 → 转换链接。
+                更换链接：列表「···」菜单 → 更换链接。
               </p>
             </div>
           )}
@@ -711,7 +964,7 @@ function SubscriptionFormDialog({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                更换 UUID：列表「···」菜单 → 转换UUID。
+                更换 UUID：列表「···」菜单 → 重置链接。
               </p>
             </div>
           )}

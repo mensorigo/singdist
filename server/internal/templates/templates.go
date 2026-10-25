@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -154,29 +155,40 @@ func (s *Service) CreateTemplate(ctx context.Context, req TemplateRequest) (Temp
 	return s.templateView(ctx, *row)
 }
 
-func (s *Service) UpdateTemplate(ctx context.Context, id int64, req TemplateRequest) (TemplateView, error) {
-	if _, err := s.st.GetTemplate(ctx, id); err != nil {
+func (s *Service) UpdateTemplate(ctx context.Context, id int64, req TemplateRequest) (TemplateView, string, error) {
+	old, err := s.st.GetTemplate(ctx, id)
+	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return TemplateView{}, errNotFound("template")
+			return TemplateView{}, "", errNotFound("template")
 		}
-		return TemplateView{}, err
+		return TemplateView{}, "", err
 	}
 	name, err := validateName(req.Name)
 	if err != nil {
-		return TemplateView{}, err
+		return TemplateView{}, "", err
 	}
-	_, idsJSON, err := s.normalizeInboundIDs(ctx, req.InboundIDs)
+	ids, idsJSON, err := s.normalizeInboundIDs(ctx, req.InboundIDs)
 	if err != nil {
-		return TemplateView{}, err
+		return TemplateView{}, "", err
 	}
 	if err := s.st.UpdateTemplate(ctx, id, name, idsJSON, nowUnix()); err != nil {
-		return TemplateView{}, nameConflictErr(err)
+		return TemplateView{}, "", nameConflictErr(err)
+	}
+	var parts []string
+	if old.Name != name {
+		parts = append(parts, "名称 "+old.Name+"→"+name)
+	}
+	var oldIDs []int64
+	_ = json.Unmarshal([]byte(old.InboundIDs), &oldIDs)
+	if len(oldIDs) != len(ids) {
+		parts = append(parts, "成员 "+strconv.Itoa(len(oldIDs))+"→"+strconv.Itoa(len(ids)))
 	}
 	row, err := s.st.GetTemplate(ctx, id)
 	if err != nil {
-		return TemplateView{}, err
+		return TemplateView{}, "", err
 	}
-	return s.templateView(ctx, *row)
+	v, err := s.templateView(ctx, *row)
+	return v, strings.Join(parts, "；"), err
 }
 
 func (s *Service) DeleteTemplate(ctx context.Context, id int64) error {

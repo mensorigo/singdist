@@ -58,11 +58,12 @@ func (h *Handler) update(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with name, port, params")
 		return
 	}
-	v, err := h.svc.Update(c.Request.Context(), id, req)
+	v, summary, err := h.svc.Update(c.Request.Context(), id, req)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
+	c.Set("auditSummary", summary)
 	c.JSON(http.StatusOK, v)
 }
 
@@ -78,11 +79,12 @@ func (h *Handler) setEnabled(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with enabled")
 		return
 	}
-	v, err := h.svc.SetEnabled(c.Request.Context(), id, *req.Enabled)
+	v, summary, err := h.svc.SetEnabled(c.Request.Context(), id, *req.Enabled)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
+	c.Set("auditSummary", summary)
 	c.JSON(http.StatusOK, v)
 }
 

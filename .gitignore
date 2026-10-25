@@ -23,3 +23,5 @@ web/src/pages/TestPage.tsx
 # OS / editor noise
 .DS_Store
 *.swp
+__pycache__/
+*.pyc

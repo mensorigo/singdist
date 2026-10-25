@@ -2,6 +2,7 @@ package logs
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -31,7 +32,7 @@ var actionLabels = map[string]string{
 	"POST /api/subscriptions":                 "创建订阅",
 	"PATCH /api/subscriptions/:id":            "修改订阅",
 	"PATCH /api/subscriptions/:id/enabled":    "启停订阅",
-	"POST /api/subscriptions/:id/reset-token": "转换链接",
+	"POST /api/subscriptions/:id/reset-token": "更换链接",
 	"POST /api/subscriptions/:id/reset-uuid":  "转换UUID",
 	"DELETE /api/subscriptions/:id":           "删除订阅",
 	"POST /api/templates":                     "创建模板",
@@ -44,15 +45,42 @@ var actionLabels = map[string]string{
 	"DELETE /api/certs/:id":                   "删除证书",
 	"PATCH /api/settings":                     "修改设置",
 	"POST /api/sync":                          "同步到核心",
+	"GET /api/subscriptions/:id/preview":      "预览订阅",
 }
+
+// coreAffectingRoutes are the mutating routes whose edits change (or may
+// change) the desired core config, so their audit rows start pending
+// until a sync covers them. Auth routes, reset-token (panel-side only),
+// the preview read and the sync call itself are not in this set: the
+// sync row carries its own applied hash instead. Cert note/upload/
+// self-signed/delete never reach the desired config — only activation
+// does — so only activation is listed.
+var coreAffectingRoutes = map[string]bool{
+	"POST /api/inbounds":                     true,
+	"PATCH /api/inbounds/:id":                true,
+	"PATCH /api/inbounds/:id/enabled":        true,
+	"DELETE /api/inbounds/:id":               true,
+	"POST /api/subscriptions":                true,
+	"PATCH /api/subscriptions/:id":           true,
+	"PATCH /api/subscriptions/:id/enabled":   true,
+	"POST /api/subscriptions/:id/reset-uuid": true,
+	"DELETE /api/subscriptions/:id":          true,
+	"POST /api/templates":                    true,
+	"PATCH /api/templates/:id":               true,
+	"DELETE /api/templates/:id":              true,
+	"POST /api/certs/:id/activate":           true,
+	"PATCH /api/settings":                    true,
+}
+
+func strptr(s string) *string { return &s }
 
 // captureWriter tees the response body (capped) so the middleware can
 // read the created object's name and the error code without touching
 // request bodies — passwords and tokens never come near the audit.
 type captureWriter struct {
 	gin.ResponseWriter
-	buf     bytes.Buffer
-	capped  bool
+	buf    bytes.Buffer
+	capped bool
 }
 
 func (w *captureWriter) Write(b []byte) (int, error) {
@@ -66,20 +94,19 @@ func (w *captureWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// AuditMiddleware records every mutating /api call and its outcome.
-// Reads are never logged: dashboard polling alone would flood the
-// table. Recording is best-effort and never fails the request itself.
-// When fileDir is non-empty, each row is also appended to
-// fileDir/audit.log (a single file) so panel operations survive as a
-// plain-text file, not only as database rows.
+// AuditMiddleware records every mutating /api call and its outcome,
+// plus the subscription preview — the one read that renders a
+// credential. Other reads are never logged: dashboard polling alone
+// would flood the table. Recording is best-effort and never fails the
+// request itself. When fileDir is non-empty, each row is also appended
+// to fileDir/audit.log (a single file) so panel operations survive as
+// a plain-text file, not only as database rows.
 func AuditMiddleware(st *store.Store, log *slog.Logger, fileDir string) gin.HandlerFunc {
-	var fw *auditFileWriter
-	if fileDir != "" {
-		fw = newAuditFileWriter(fileDir, LocationFromStore(st))
-	}
 	return func(c *gin.Context) {
 		method := c.Request.Method
-		if method != http.MethodPost && method != http.MethodPatch &&
+		key := method + " " + c.FullPath()
+		isPreview := key == "GET /api/subscriptions/:id/preview"
+		if !isPreview && method != http.MethodPost && method != http.MethodPatch &&
 			method != http.MethodPut && method != http.MethodDelete {
 			c.Next()
 			return
@@ -93,7 +120,6 @@ func AuditMiddleware(st *store.Store, log *slog.Logger, fileDir string) gin.Hand
 		c.Next()
 
 		status := c.Writer.Status()
-		key := method + " " + c.FullPath()
 		action, ok := actionLabels[key]
 		if !ok {
 			// Unmatched routes have an empty FullPath; fall back to
@@ -105,17 +131,64 @@ func AuditMiddleware(st *store.Store, log *slog.Logger, fileDir string) gin.Hand
 			action = method + " " + fp
 		}
 		var body struct {
-			Name string `json:"name"`
-			Code string `json:"code"`
+			Name   string `json:"name"`
+			Code   string `json:"code"`
+			Result string `json:"result"`
+			Hash   string `json:"hash"`
+			Detail string `json:"detail"`
 		}
 		_ = json.Unmarshal(cw.buf.Bytes(), &body)
 		target := body.Name
 		if target == "" {
 			target = c.Param("id")
 		}
+		// Login rows carry the attempted username: the login response
+		// has no name field, so without this the row would show no
+		// target at all. Only the username is ever read, never the
+		// password (the handler sets just the username).
+		if key == "POST /api/auth/login" {
+			if u := c.GetString("auditUsername"); u != "" {
+				target = u
+			}
+		}
 		result, detail := "success", ""
-		if status >= 400 {
+		if key == "POST /api/sync" {
+			// The sync endpoint always answers 200 with the sync row,
+			// so the HTTP status cannot tell success from failure —
+			// the row's own result is the truth. The frontend reads
+			// it the same way, which is why the status stays 200.
+			switch body.Result {
+			case "applied", "no_change":
+				result = "success"
+			default:
+				result = "failed"
+				detail = body.Detail
+				if detail == "" {
+					detail = body.Result
+				}
+			}
+			if body.Hash != "" {
+				target = body.Hash
+				if len(target) > 8 {
+					target = target[:8]
+				}
+			}
+		} else if status >= 400 {
 			result, detail = "failed", body.Code
+		}
+		// Sync rows need no coverage state: their target already is
+		// the result hash. Only core-affecting edits start pending.
+		var appliedHash *string
+		if key != "POST /api/sync" && coreAffectingRoutes[key] {
+			appliedHash = strptr("")
+		}
+		// A change summary is only meaningful when the change landed;
+		// on failure nothing changed, so a stale summary must not stick.
+		summary := ""
+		if result == "success" {
+			if v, ok := c.Get("auditSummary"); ok {
+				summary, _ = v.(string)
+			}
 		}
 		row := store.AuditRow{
 			At:     time.Now().Unix(),
@@ -123,14 +196,29 @@ func AuditMiddleware(st *store.Store, log *slog.Logger, fileDir string) gin.Hand
 			Target: target,
 			Result: result,
 			Detail: detail,
+			// RemoteIP, not ClientIP: the panel is directly exposed, so
+			// the TCP peer is the trustworthy source; a forwarded
+			// header would be client-spoofable here.
+			IP:          c.RemoteIP(),
+			AppliedHash: appliedHash,
+			Summary:     summary,
 		}
-		if err := st.AddAuditLog(c.Request.Context(), row); err != nil {
-			log.Warn("logs: audit write failed", "err", err)
-		}
-		if fw != nil {
-			if err := fw.Write(c.Request.Context(), row); err != nil {
-				log.Warn("logs: audit file write failed", "err", err)
-			}
+		RecordAudit(c.Request.Context(), st, log, fileDir, row)
+	}
+}
+
+// RecordAudit writes one audit row to the database and, when fileDir is
+// non-empty, appends it to the audit file. Best-effort: a failure is
+// logged and never fails the caller. System-triggered rows (the
+// auto-sync ticker) use this directly, bypassing the HTTP middleware.
+func RecordAudit(ctx context.Context, st *store.Store, log *slog.Logger, fileDir string, row store.AuditRow) {
+	if err := st.AddAuditLog(ctx, row); err != nil {
+		log.Warn("logs: audit write failed", "err", err)
+	}
+	if fileDir != "" {
+		fw := newAuditFileWriter(fileDir, LocationFromStore(st))
+		if err := fw.Write(ctx, row); err != nil {
+			log.Warn("logs: audit file write failed", "err", err)
 		}
 	}
 }

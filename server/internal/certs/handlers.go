@@ -106,11 +106,12 @@ func (h *Handler) updateNote(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with note")
 		return
 	}
-	info, err := h.mgr.UpdateNote(c.Param("id"), req.Note)
+	info, summary, err := h.mgr.UpdateNote(c.Param("id"), req.Note)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
+	c.Set("auditSummary", summary)
 	c.JSON(http.StatusOK, info)
 }
 

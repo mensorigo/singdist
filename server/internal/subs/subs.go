@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -162,6 +163,41 @@ func (s *Service) ListSubscriptions(ctx context.Context) ([]SubscriptionView, er
 	return out, nil
 }
 
+// OnlineIPResult is the online-IP snapshot: per-subscription distinct-IP
+// counts and the panel-wide distinct-IP total (one IP using several
+// subscriptions counts once in the total).
+type OnlineIPResult struct {
+	Counts map[int64]int `json:"counts"`
+	Total  int           `json:"total"`
+}
+
+// OnlineIPCounts counts distinct source IPs per subscription from
+// connection log rows. The window is a fixed 30s: long enough to smooth
+// bursty traffic, short enough to still mean "online". The display
+// refresh rate itself follows the dashboard interval setting.
+func (s *Service) OnlineIPCounts(ctx context.Context) (OnlineIPResult, error) {
+	sinceMs := time.Now().UnixMilli() - 30*1000
+	sets, err := s.st.OnlineIPs(ctx, sinceMs)
+	if err != nil {
+		return OnlineIPResult{}, err
+	}
+	rows, err := s.st.ListSubscriptions(ctx)
+	if err != nil {
+		return OnlineIPResult{}, err
+	}
+	res := OnlineIPResult{Counts: map[int64]int{}}
+	union := map[string]struct{}{}
+	for _, r := range rows {
+		ips := sets[r.Name]
+		res.Counts[r.ID] = len(ips)
+		for ip := range ips {
+			union[ip] = struct{}{}
+		}
+	}
+	res.Total = len(union)
+	return res, nil
+}
+
 func (s *Service) viewByID(ctx context.Context, id int64) (SubscriptionView, error) {
 	row, err := s.st.GetSubscription(ctx, id)
 	if err != nil {
@@ -203,21 +239,80 @@ func (s *Service) CreateSubscription(ctx context.Context, req SubscriptionReques
 	return s.viewByID(ctx, id)
 }
 
-func (s *Service) UpdateSubscription(ctx context.Context, id int64, req SubscriptionRequest) (SubscriptionView, error) {
-	if _, err := s.st.GetSubscription(ctx, id); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return SubscriptionView{}, errNotFound("subscription")
+// humanBytes renders a byte cap the way the panel talks about it
+// (decimal units, 1TB = 10^12); 0 means unlimited.
+func humanBytes(b int64) string {
+	if b <= 0 {
+		return "不限量"
+	}
+	units := []struct {
+		name string
+		div  int64
+	}{
+		{"TB", 1000000000000},
+		{"GB", 1000000000},
+		{"MB", 1000000},
+		{"KB", 1000},
+	}
+	for _, u := range units {
+		if b >= u.div {
+			v := float64(b) / float64(u.div)
+			if v == float64(int64(v)) {
+				return strconv.FormatInt(int64(v), 10) + u.name
+			}
+			return strconv.FormatFloat(v, 'f', 1, 64) + u.name
 		}
-		return SubscriptionView{}, err
+	}
+	return strconv.FormatInt(b, 10) + "B"
+}
+
+// formatExpire renders an expiry instant as a date. ExpireAt is stored
+// as end-of-day in the panel timezone, so the UTC date matches the
+// panel date for timezones east of UTC.
+func formatExpire(ts int64) string {
+	if ts <= 0 {
+		return "永不过期"
+	}
+	return time.Unix(ts, 0).UTC().Format("2006-01-02")
+}
+
+func (s *Service) UpdateSubscription(ctx context.Context, id int64, req SubscriptionRequest) (SubscriptionView, string, error) {
+	old, err := s.viewByID(ctx, id)
+	if err != nil {
+		return SubscriptionView{}, "", err
 	}
 	name, err := s.validateSubscriptionFields(ctx, req)
 	if err != nil {
-		return SubscriptionView{}, err
+		return SubscriptionView{}, "", err
 	}
 	if err := s.st.UpdateSubscription(ctx, id, name, req.TemplateID, req.LimitBytes, req.ExpireAt, req.MaxIPs, nowUnix()); err != nil {
-		return SubscriptionView{}, nameConflictErr(err, "subscriptions")
+		return SubscriptionView{}, "", nameConflictErr(err, "subscriptions")
 	}
-	return s.viewByID(ctx, id)
+	// Summary covers safe fields only: never uuid/token.
+	newTplName := ""
+	if req.TemplateID != 0 {
+		if t, err := s.st.GetTemplate(ctx, req.TemplateID); err == nil {
+			newTplName = t.Name
+		}
+	}
+	var parts []string
+	if old.Name != name {
+		parts = append(parts, "名称 "+old.Name+"→"+name)
+	}
+	if old.TemplateName != newTplName {
+		parts = append(parts, "模板 "+old.TemplateName+"→"+newTplName)
+	}
+	if old.LimitBytes != req.LimitBytes {
+		parts = append(parts, "上限 "+humanBytes(old.LimitBytes)+"→"+humanBytes(req.LimitBytes))
+	}
+	if old.ExpireAt != req.ExpireAt {
+		parts = append(parts, "到期 "+formatExpire(old.ExpireAt)+"→"+formatExpire(req.ExpireAt))
+	}
+	if old.MaxIPs != req.MaxIPs {
+		parts = append(parts, "最大IP数 "+strconv.Itoa(old.MaxIPs)+"→"+strconv.Itoa(req.MaxIPs))
+	}
+	v, err := s.viewByID(ctx, id)
+	return v, strings.Join(parts, "；"), err
 }
 
 func (s *Service) DeleteSubscription(ctx context.Context, id int64) error {
@@ -230,15 +325,34 @@ func (s *Service) DeleteSubscription(ctx context.Context, id int64) error {
 	return s.st.DeleteSubscription(ctx, id)
 }
 
-func (s *Service) SetSubscriptionEnabled(ctx context.Context, id int64, enabled bool) (SubscriptionView, error) {
+func (s *Service) SetSubscriptionEnabled(ctx context.Context, id int64, enabled bool) (SubscriptionView, string, error) {
+	old, err := s.st.GetSubscription(ctx, id)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return SubscriptionView{}, "", errNotFound("subscription")
+		}
+		return SubscriptionView{}, "", err
+	}
 	ok, err := s.st.SetSubscriptionEnabled(ctx, id, enabled, nowUnix())
 	if err != nil {
-		return SubscriptionView{}, err
+		return SubscriptionView{}, "", err
 	}
 	if !ok {
-		return SubscriptionView{}, errNotFound("subscription")
+		return SubscriptionView{}, "", errNotFound("subscription")
 	}
-	return s.viewByID(ctx, id)
+	v, err := s.viewByID(ctx, id)
+	if err != nil {
+		return SubscriptionView{}, "", err
+	}
+	summary := ""
+	if old.Enabled != enabled {
+		if enabled {
+			summary = "停用→启用"
+		} else {
+			summary = "启用→停用"
+		}
+	}
+	return v, summary, nil
 }
 
 // ResetSubscriptionToken rotates the token; the old subscription link

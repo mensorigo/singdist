@@ -33,16 +33,20 @@ type Entry struct {
 	Tag         string `json:"tag,omitempty"`
 	User        string `json:"user,omitempty"`
 	// Panel-operation fields.
-	Action string `json:"action,omitempty"`
-	Target string `json:"target,omitempty"`
-	Result string `json:"result,omitempty"`
-	Detail string `json:"detail,omitempty"`
+	Action      string  `json:"action,omitempty"`
+	Target      string  `json:"target,omitempty"`
+	Result      string  `json:"result,omitempty"`
+	Detail      string  `json:"detail,omitempty"`
+	IP          string  `json:"ip,omitempty"`
+	AppliedHash *string `json:"applied_hash,omitempty"`
+	Summary     string  `json:"summary,omitempty"`
 }
 
-// ListParams scopes one page. Category is "core", "panel" or
-// "connection". Before is an opaque cursor from a previous response's
-// NextBefore: an audit id for panel, a core_logs id for the ingested
-// categories. Empty means the latest page.
+// ListParams scopes one page. Category is "core", "panel",
+// "connection" or "config". Before is an opaque cursor from a
+// previous response's NextBefore: an audit id for panel, a
+// core_logs id for the ingested categories, a config_change_logs id
+// for config. Empty means the latest page.
 type ListParams struct {
 	Category string
 	Keyword  string
@@ -86,6 +90,8 @@ func (s *Service) List(ctx context.Context, p ListParams) (ListResult, error) {
 		return s.listPanel(ctx, p, limit)
 	case "connection":
 		return s.listIngested(ctx, "connection", p, limit)
+	case "config":
+		return s.listConfig(ctx, p, limit)
 	case "core", "":
 		return s.listIngested(ctx, "core", p, limit)
 	default:
@@ -110,12 +116,76 @@ func (s *Service) listPanel(ctx context.Context, p ListParams, limit int) (ListR
 	entries := make([]Entry, 0, len(rows))
 	for _, r := range rows {
 		entries = append(entries, Entry{
+			Ts:          r.At * 1000,
+			Category:    "panel",
+			Action:      r.Action,
+			Target:      r.Target,
+			Result:      r.Result,
+			Detail:      r.Detail,
+			IP:          r.IP,
+			AppliedHash: r.AppliedHash,
+			Summary:     r.Summary,
+		})
+	}
+	res := ListResult{Entries: entries}
+	if len(rows) == limit {
+		res.NextBefore = strconv.FormatInt(rows[len(rows)-1].ID, 10)
+	}
+	return res, nil
+}
+
+// configActionLabel maps a config change action to its Chinese label
+// for the Logs page.
+func configActionLabel(action string) string {
+	switch action {
+	case "updated":
+		return "文件改动"
+	case "added":
+		return "文件新增"
+	case "deleted":
+		return "文件删除"
+	case "passthrough":
+		return "透传保留"
+	case "dropped_illegal":
+		return "非法丢弃"
+	case "reverted":
+		return "恢复面板"
+	case "restore_note":
+		return "恢复提示"
+	default:
+		return action
+	}
+}
+
+// listConfig serves a config-change page from config_change_logs:
+// the per-field record of what each sync imported, preserved,
+// dropped or reverted.
+func (s *Service) listConfig(ctx context.Context, p ListParams, limit int) (ListResult, error) {
+	var before int64
+	if p.Before != "" {
+		before, _ = strconv.ParseInt(p.Before, 10, 64)
+	}
+	rows, err := s.st.ListConfigChanges(ctx, store.ConfigChangeFilter{
+		Keyword: p.Keyword,
+		Before:  before,
+		Limit:   limit,
+	})
+	if err != nil {
+		return ListResult{}, err
+	}
+	entries := make([]Entry, 0, len(rows))
+	for _, r := range rows {
+		change := ""
+		if r.OldValue != "" || r.NewValue != "" {
+			change = r.OldValue + "→" + r.NewValue
+		}
+		entries = append(entries, Entry{
 			Ts:       r.At * 1000,
-			Category: "panel",
-			Action:   r.Action,
-			Target:   r.Target,
-			Result:   r.Result,
+			Category: "config",
+			Action:   configActionLabel(r.Action),
+			Target:   r.Item,
 			Detail:   r.Detail,
+			Summary:  change,
 		})
 	}
 	res := ListResult{Entries: entries}

@@ -297,6 +297,11 @@ export const api = {
       }),
     preview: (id: number) =>
       request<SubscriptionPreview>(`/api/subscriptions/${id}/preview`),
+    onlineIps: () =>
+      request<{
+        counts: Record<string, number>;
+        total: number;
+      }>("/api/subscriptions/online-ips"),
   },
   settings: {
     get: () => request<SettingsView>("/api/settings"),
@@ -321,7 +326,7 @@ export interface SyncLogEntry {
   detail: string;
 }
 
-export type LogCategory = "core" | "panel" | "connection";
+export type LogCategory = "core" | "panel" | "connection" | "config";
 
 export interface LogEntry {
   ts: number;
@@ -336,6 +341,9 @@ export interface LogEntry {
   target?: string;
   result?: string;
   detail?: string;
+  ip?: string;
+  applied_hash?: string;
+  summary?: string;
 }
 
 export interface LogPage {
@@ -380,6 +388,9 @@ export interface SettingsView {
   textSelectable: boolean;
   timezone: string;
   showWarnings: boolean;
+  dashIntervalSecs: number;
+  autoSyncEnabled: boolean;
+  autoSyncIntervalSecs: number;
 }
 
 export interface SettingsUpdate {
@@ -395,6 +406,9 @@ export interface SettingsUpdate {
   textSelectable?: boolean;
   timezone?: string;
   showWarnings?: boolean;
+  dashIntervalSecs?: number;
+  autoSyncEnabled?: boolean;
+  autoSyncIntervalSecs?: number;
 }
 
 export interface TemplateView {

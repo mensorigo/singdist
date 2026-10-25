@@ -21,7 +21,6 @@ import {
 import { formatBytes, formatRate, formatUptime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
-const POLL_MS = 2000;
 const TREND_POLL_MS = 30000;
 
 const GRANULARITIES: { key: TrendGranularity; label: string; range: string }[] = [
@@ -44,6 +43,27 @@ export default function DashboardPage({
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [fetchError, setFetchError] = useState(false);
   const timer = useRef<number | null>(null);
+  // Summary poll interval from settings (seconds); default 3 matches
+  // the backend default until settings load.
+  const [pollMs, setPollMs] = useState(3000);
+  const [online, setOnline] = useState<{
+    total: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const v = await api.settings.get();
+        if (!cancelled) setPollMs(v.dashIntervalSecs * 1000);
+      } catch {
+        /* keep the default interval */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshSignal]);
 
   // Runs on mount, on every poll tick, and whenever the top-bar refresh
   // button bumps refreshSignal — an in-place refetch, never a remount.
@@ -67,12 +87,34 @@ export default function DashboardPage({
       }
     }
     void load();
-    timer.current = window.setInterval(load, POLL_MS);
+    timer.current = window.setInterval(load, pollMs);
     return () => {
       cancelled = true;
       if (timer.current) window.clearInterval(timer.current);
     };
-  }, [refreshSignal]);
+  }, [refreshSignal, pollMs]);
+
+  // Online-device counts ride the dashboard poll timer; failures
+  // stay silent, the card keeps its last value.
+  useEffect(() => {
+    let cancelled = false;
+    let timer: number | null = null;
+    const load = async () => {
+      try {
+        const r = await api.subscriptions.onlineIps();
+        if (!cancelled)
+          setOnline({ total: r.total });
+      } catch {
+        /* silent: stats only */
+      }
+    };
+    void load();
+    timer = window.setInterval(load, pollMs);
+    return () => {
+      cancelled = true;
+      if (timer) window.clearInterval(timer);
+    };
+  }, [refreshSignal, pollMs]);
 
   if (!data) {
     return (
@@ -162,8 +204,8 @@ export default function DashboardPage({
         />
         <DashCard
           icon={<Users className="h-5 w-5" />}
-          label="独立 IP"
-          value={String(data.distinctIPs)}
+          label="在线设备"
+          value={online ? String(online.total) : "—"}
           sub={`共 ${data.activeConns} 条连接`}
         />
       </div>

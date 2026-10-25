@@ -18,6 +18,7 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
 func (h *Handler) RegisterProtected(rg *gin.RouterGroup) {
 	rg.GET("/subscriptions", h.listSubscriptions)
+	rg.GET("/subscriptions/online-ips", h.onlineIPCounts)
 	rg.POST("/subscriptions", h.createSubscription)
 	rg.PATCH("/subscriptions/:id", h.updateSubscription)
 	rg.PATCH("/subscriptions/:id/enabled", h.setSubscriptionEnabled)
@@ -30,6 +31,15 @@ func (h *Handler) RegisterProtected(rg *gin.RouterGroup) {
 
 func (h *Handler) listSubscriptions(c *gin.Context) {
 	res, err := h.svc.ListSubscriptions(c.Request.Context())
+	if err != nil {
+		failErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+func (h *Handler) onlineIPCounts(c *gin.Context) {
+	res, err := h.svc.OnlineIPCounts(c.Request.Context())
 	if err != nil {
 		failErr(c, err)
 		return
@@ -61,11 +71,12 @@ func (h *Handler) updateSubscription(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with name, templateId, limitBytes, expireAt, maxIps")
 		return
 	}
-	v, err := h.svc.UpdateSubscription(c.Request.Context(), id, req)
+	v, summary, err := h.svc.UpdateSubscription(c.Request.Context(), id, req)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
+	c.Set("auditSummary", summary)
 	c.JSON(http.StatusOK, v)
 }
 
@@ -81,11 +92,12 @@ func (h *Handler) setSubscriptionEnabled(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with enabled")
 		return
 	}
-	v, err := h.svc.SetSubscriptionEnabled(c.Request.Context(), id, *req.Enabled)
+	v, summary, err := h.svc.SetSubscriptionEnabled(c.Request.Context(), id, *req.Enabled)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
+	c.Set("auditSummary", summary)
 	c.JSON(http.StatusOK, v)
 }
 

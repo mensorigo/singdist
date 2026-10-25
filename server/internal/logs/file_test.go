@@ -21,7 +21,7 @@ func TestAuditFileSingleFile(t *testing.T) {
 
 	rows := []store.AuditRow{
 		{At: 1729752000, Action: "创建入站", Target: "hy2", Result: "success"},
-		{At: 1729752060, Action: "登录", Result: "failed", Detail: "invalid_credentials"},
+		{At: 1729752060, Action: "登录", Result: "failed", Detail: "invalid_credentials", IP: "203.0.113.7"},
 		{At: 1729752120, Action: "修改设置", Result: "success"},
 	}
 	for _, r := range rows {
@@ -37,7 +37,7 @@ func TestAuditFileSingleFile(t *testing.T) {
 	got := string(data)
 	for _, want := range []string{
 		"[成功] 创建入站 hy2",
-		"[失败] 登录 (invalid_credentials)",
+		"[失败] 登录 (invalid_credentials) [203.0.113.7]",
 		"[成功] 修改设置",
 	} {
 		if !strings.Contains(got, want) {
@@ -55,6 +55,20 @@ func TestAuditFileSingleFile(t *testing.T) {
 		At: 1729752000, Action: "登录", Result: "success",
 	})
 	if line != "2024-10-24 14:40:00 [成功] 登录\n" {
+		t.Fatalf("format = %q", line)
+	}
+	// And with an IP: appended in brackets, nothing else changes.
+	line = w.format(context.Background(), store.AuditRow{
+		At: 1729752000, Action: "登录", Result: "success", IP: "203.0.113.7",
+	})
+	if line != "2024-10-24 14:40:00 [成功] 登录 [203.0.113.7]\n" {
+		t.Fatalf("format = %q", line)
+	}
+	// And with a summary: appended after the IP.
+	line = w.format(context.Background(), store.AuditRow{
+		At: 1729752000, Action: "修改入站", Target: "hy2", Result: "success", IP: "203.0.113.7", Summary: "端口 443→8443",
+	})
+	if line != "2024-10-24 14:40:00 [成功] 修改入站 hy2 [203.0.113.7] 端口 443→8443\n" {
 		t.Fatalf("format = %q", line)
 	}
 }

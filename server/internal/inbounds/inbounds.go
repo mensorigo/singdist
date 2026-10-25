@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -349,10 +350,10 @@ type UpdateRequest struct {
 	Params json.RawMessage `json:"params"`
 }
 
-func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (View, error) {
+func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (View, string, error) {
 	rows, err := s.st.ListInbounds(ctx)
 	if err != nil {
-		return View{}, err
+		return View{}, "", err
 	}
 	var cur *store.InboundRow
 	for i := range rows {
@@ -362,36 +363,62 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (View
 		}
 	}
 	if cur == nil {
-		return View{}, errNotFound()
+		return View{}, "", errNotFound()
 	}
 	name, err := validateNamePort(req.Name, req.Port)
 	if err != nil {
-		return View{}, err
+		return View{}, "", err
 	}
 	params, err := normalizeParams(cur.Protocol, req.Params, false)
 	if err != nil {
-		return View{}, err
+		return View{}, "", err
 	}
 	if err := s.checkPortConflict(ctx, id, cur.Protocol, req.Port); err != nil {
-		return View{}, err
+		return View{}, "", err
+	}
+	// Summary covers safe fields only: params carry secrets (passwords,
+	// private keys) and are never summarized.
+	var parts []string
+	if cur.Name != name {
+		parts = append(parts, "名称 "+cur.Name+"→"+name)
+	}
+	if cur.Port != req.Port {
+		parts = append(parts, "端口 "+strconv.Itoa(cur.Port)+"→"+strconv.Itoa(req.Port))
 	}
 	if err := s.st.UpdateInbound(ctx, id, name, req.Port, params, nowUnix()); err != nil {
-		return View{}, conflictErr(err)
+		return View{}, "", conflictErr(err)
 	}
-	return s.viewByID(ctx, id)
+	v, err := s.viewByID(ctx, id)
+	return v, strings.Join(parts, "；"), err
 }
 
 // SetEnabled parks or un-parks an inbound. A disabled inbound keeps its
 // record but is excluded when desired state is applied to the core.
-func (s *Service) SetEnabled(ctx context.Context, id int64, enabled bool) (View, error) {
+func (s *Service) SetEnabled(ctx context.Context, id int64, enabled bool) (View, string, error) {
+	old, err := s.viewByID(ctx, id)
+	if err != nil {
+		return View{}, "", err
+	}
 	ok, err := s.st.SetInboundEnabled(ctx, id, enabled, nowUnix())
 	if err != nil {
-		return View{}, err
+		return View{}, "", err
 	}
 	if !ok {
-		return View{}, errNotFound()
+		return View{}, "", errNotFound()
 	}
-	return s.viewByID(ctx, id)
+	v, err := s.viewByID(ctx, id)
+	if err != nil {
+		return View{}, "", err
+	}
+	summary := ""
+	if old.Enabled != enabled {
+		if enabled {
+			summary = "停用→启用"
+		} else {
+			summary = "启用→停用"
+		}
+	}
+	return v, summary, nil
 }
 
 func (s *Service) Delete(ctx context.Context, id int64) error {

@@ -172,9 +172,12 @@ export default function App() {
       {route === "security" && (
         <SecurityPage
           username={auth.username}
-          onUsernameChanged={(u) =>
-            setAuth({ phase: "authed", username: u })
-          }
+          onUsernameChanged={(u) => {
+            // Keep the login page's remembered username in step, or
+            // it would prefill the old name after logout.
+            localStorage.setItem("singbox-ui-username", u);
+            setAuth({ phase: "authed", username: u });
+          }}
         />
       )}
     </AppLayout>

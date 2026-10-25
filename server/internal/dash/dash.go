@@ -1,6 +1,7 @@
 // Package dash implements the dashboard backend: a sampler that polls the
-// core (via core.CoreClient) every 2 seconds and keeps a ring buffer of
-// throughput samples, plus host system information read from /proc.
+// core (via core.CoreClient) on the dash_interval_secs setting (default
+// 3 seconds) and keeps a ring buffer of throughput samples, plus host
+// system information read from /proc.
 // Traffic deltas are persisted as per-minute buckets (via the Repository
 // seam) so the dashboard can show today / all-time totals and a traffic
 // trend chart, mirroring the old panel's data model.
@@ -20,8 +21,11 @@ import (
 )
 
 const (
-	tickInterval = 2 * time.Second
-	ringSize     = 120 // 120 points * 2s = 4 minutes of history
+	// dashIntervalDefaultSecs is the sampler interval when the setting
+	// is unset or invalid; the ring span then varies with the setting
+	// (120 points cover 2 minutes at 1s, 2 hours at 60s).
+	dashIntervalDefaultSecs = 3
+	ringSize                = 120
 
 	// trafficRetention bounds the per-minute bucket history (35 days
 	// covers the 30-day trend view plus slack).
@@ -34,6 +38,11 @@ const (
 	// re-reads it on every tick so a settings change applies without
 	// a panel restart.
 	timezoneSettingKey = "timezone"
+
+	// dashIntervalSettingKey mirrors settings.keyDashIntervalSecs;
+	// re-read the same way, so the interval applies without restart
+	// (from the next wait onward).
+	dashIntervalSettingKey = "dash_interval_secs"
 )
 
 // Repository is the persistence seam dash needs from the store layer.
@@ -124,6 +133,9 @@ type Sampler struct {
 	repo   Repository
 	log    *slog.Logger
 	loc    atomic.Pointer[time.Location]
+	// intervalSecs is the current sample interval, refreshed from
+	// settings on every tick (default dashIntervalDefaultSecs).
+	intervalSecs atomic.Int64
 
 	startedAt time.Time
 
@@ -171,7 +183,7 @@ func NewSampler(client core.CoreClient, repo Repository, log *slog.Logger) *Samp
 
 // currentLoc returns the panel timezone: the stored setting when it
 // parses, the default otherwise. The tick loop refreshes it from the
-// setting every 2s, so a settings change applies without restart.
+// setting on every tick, so a settings change applies without restart.
 func (s *Sampler) currentLoc() *time.Location {
 	if loc := s.loc.Load(); loc != nil {
 		return loc
@@ -179,14 +191,20 @@ func (s *Sampler) currentLoc() *time.Location {
 	return panelLocation()
 }
 
-// Start runs the sampling loop until ctx is cancelled.
+// Start runs the sampling loop until ctx is cancelled. The wait between
+// samples follows the interval the last tick read from settings, so a
+// settings change applies from the next wait onward, without restart.
 func (s *Sampler) Start(ctx context.Context) {
 	s.tick(ctx) // sample immediately so the first page load has data
-	t := time.NewTicker(tickInterval)
-	defer t.Stop()
 	for {
+		secs := s.intervalSecs.Load()
+		if secs < 1 || secs > 60 {
+			secs = dashIntervalDefaultSecs
+		}
+		t := time.NewTimer(time.Duration(secs) * time.Second)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
 		case <-t.C:
 			s.tick(ctx)
@@ -204,6 +222,11 @@ func (s *Sampler) tick(ctx context.Context) {
 		if v, ok, err := s.repo.GetSetting(locCtx, timezoneSettingKey); err == nil && ok {
 			if loc, lerr := time.LoadLocation(strings.TrimSpace(v)); lerr == nil {
 				s.loc.Store(loc)
+			}
+		}
+		if v, ok, err := s.repo.GetSetting(locCtx, dashIntervalSettingKey); err == nil && ok {
+			if n, nerr := strconv.Atoi(strings.TrimSpace(v)); nerr == nil && n >= 1 && n <= 60 {
+				s.intervalSecs.Store(int64(n))
 			}
 		}
 		locCancel()
@@ -424,7 +447,7 @@ func (s *Sampler) Trend(granularity string) Trend {
 	case "minute":
 		window, bucketSecs = time.Hour, 60
 	case "hour":
-		window, bucketSecs = 24 * time.Hour, 3600
+		window, bucketSecs = 24*time.Hour, 3600
 	default:
 		granularity, window, bucketSecs = "day", 30*24*time.Hour, 86400
 	}

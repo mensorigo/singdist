@@ -56,11 +56,12 @@ func (h *Handler) updateTemplate(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with name, inboundIds")
 		return
 	}
-	v, err := h.svc.UpdateTemplate(c.Request.Context(), id, req)
+	v, summary, err := h.svc.UpdateTemplate(c.Request.Context(), id, req)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
+	c.Set("auditSummary", summary)
 	c.JSON(http.StatusOK, v)
 }
 

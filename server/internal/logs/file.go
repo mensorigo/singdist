@@ -84,6 +84,15 @@ func (w *auditFileWriter) format(ctx context.Context, r store.AuditRow) string {
 		b.WriteString(r.Detail)
 		b.WriteString(")")
 	}
+	if r.IP != "" {
+		b.WriteString(" [")
+		b.WriteString(r.IP)
+		b.WriteString("]")
+	}
+	if r.Summary != "" {
+		b.WriteString(" ")
+		b.WriteString(r.Summary)
+	}
 	b.WriteString("\n")
 	return b.String()
 }

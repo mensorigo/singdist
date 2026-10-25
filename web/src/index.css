@@ -108,6 +108,20 @@
   }
 }
 
+/* Global button focus-border kill (user decision 2026-10-25): a
+   button must never show the black border after click, double-click
+   or any other interaction — neither the browser default outline
+   (raw icon buttons) nor the shadcn focus-visible ring (ring color
+   is the near-black --ring). !important wins over the utilities
+   layer; only the focused state is affected, default shadows stay. */
+button:focus,
+button:focus-visible,
+[role="button"]:focus,
+[role="button"]:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
 /* Text-selection switch (settings.textSelectable): the layout applies
    select-none to the whole authenticated area when off. Form fields
    keep their own selectable text — a direct declaration beats the

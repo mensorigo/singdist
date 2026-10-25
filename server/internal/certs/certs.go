@@ -272,29 +272,34 @@ func (m *Manager) GenerateSelfSigned(names []string, days int, note string, acti
 // UpdateNote rewrites a version's display note in its meta.json. The note
 // is a free-form label (max 120 characters); everything else about the
 // version is untouched.
-func (m *Manager) UpdateNote(id, note string) (Info, error) {
+func (m *Manager) UpdateNote(id, note string) (Info, string, error) {
 	note = strings.TrimSpace(note)
 	if len([]rune(note)) > 120 {
-		return Info{}, errValidation("note must be at most 120 characters")
+		return Info{}, "", errValidation("note must be at most 120 characters")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if !validID(id) || !m.exists(id) {
-		return Info{}, errNotFound(id)
+		return Info{}, "", errNotFound(id)
 	}
 	meta, err := m.readMeta(id)
 	if err != nil {
-		return Info{}, err
+		return Info{}, "", err
+	}
+	summary := ""
+	if meta.Note != note {
+		summary = "备注 " + meta.Note + "→" + note
 	}
 	meta.Note = note
 	raw, err := json.Marshal(meta)
 	if err != nil {
-		return Info{}, fmt.Errorf("certs: encode meta: %w", err)
+		return Info{}, "", fmt.Errorf("certs: encode meta: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(m.versionsDir, id, "meta.json"), raw, 0o644); err != nil {
-		return Info{}, fmt.Errorf("certs: write meta.json: %w", err)
+		return Info{}, "", fmt.Errorf("certs: write meta.json: %w", err)
 	}
-	return m.infoLocked(id)
+	v, err := m.infoLocked(id)
+	return v, summary, err
 }
 
 // Activate switches the served certificate to the given version.

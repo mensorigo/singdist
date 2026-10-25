@@ -198,30 +198,94 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 		CoreUnit:   cfg.coreUnit,
 		ClashAPI:   cfg.clashAPI,
 		LogPath:    filepath.Join(cfg.dataDir, "logs", "sing-box.log"),
+		Log:        log,
 	})
 	syncHandler := coresync.NewHandler(syncSvc)
 
-	// --- periodic auto-sync (opt-in; 0 = disabled) -----------------------
-	// The ticker only acts when the desired config differs from the
-	// target, so idle ticks change nothing and leave no log rows.
+	// --- auto-sync checker (settings-driven) ---------------------------
+	// Wakes every 10s and syncs only when due, so interval and on/off
+	// changes apply without a restart:
+	//   - switch off: skip entirely;
+	//   - interval 0: sync once changes have been quiet for a few seconds
+	//     (debounce: a burst of edits becomes one sync, not one restart
+	//     per edit), or immediately when the drift came from the file
+	//     side (no pending panel rows to debounce on);
+	//   - interval > 0: sync once the last sync row is older than the
+	//     interval — so re-enabling after a long-off period picks
+	//     pending changes up within one check.
+	// The checker only acts when the desired config differs from the
+	// target, so idle checks change nothing and leave no log rows.
 	// Manual sync stays available and is serialized by the same mutex.
-	if cfg.autoSyncMin > 0 {
-		interval := time.Duration(cfg.autoSyncMin) * time.Minute
-		slog.Info("auto-sync enabled", "interval", interval)
-		go func() {
-			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
-			for range ticker.C {
-				row, ran, err := syncSvc.AutoSync(context.Background())
-				switch {
-				case err != nil:
-					slog.Warn("auto-sync check failed", "error", err)
-				case ran:
-					slog.Info("auto-sync applied", "result", row.Result, "hash", row.Hash)
+	// SINGBOX_UI_AUTO_SYNC_MINUTES survives only as the legacy fallback
+	// inside settings.GetAutoSync (fresh DBs / the scenario harness).
+	slog.Info("auto-sync checker started", "checkInterval", "10s")
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			ctx := context.Background()
+			enabled, interval, err := settingsSvc.GetAutoSync(ctx, cfg.autoSyncMin)
+			if err != nil {
+				slog.Warn("auto-sync settings read failed", "error", err)
+				continue
+			}
+			if !enabled {
+				continue
+			}
+			status, err := syncSvc.Status(ctx)
+			if err != nil {
+				slog.Warn("auto-sync check failed", "error", err)
+				continue
+			}
+			if status.InSync {
+				continue
+			}
+			if interval == 0 {
+				lastChange, err := st.LatestPendingAuditAt(ctx)
+				if err == nil && lastChange > 0 && time.Now().Unix()-lastChange < 5 {
+					continue // changes still landing; wait for quiet
+				}
+			} else {
+				var lastSync int64
+				if status.Last != nil {
+					lastSync = status.Last.At
+				}
+				if time.Now().Unix()-lastSync < int64(interval) {
+					continue
 				}
 			}
-		}()
-	}
+			row, ran, err := syncSvc.AutoSync(ctx)
+			switch {
+			case err != nil:
+				slog.Warn("auto-sync check failed", "error", err)
+			case ran:
+				slog.Info("auto-sync applied", "result", row.Result, "hash", row.Hash)
+				// The ticker bypasses HTTP, so the audit
+				// middleware never sees it — record it
+				// explicitly, or the Logs page timeline would
+				// have a hole where the core actually changed.
+				result, detail := "success", ""
+				if row.Result != "applied" && row.Result != "no_change" {
+					result = "failed"
+					detail = row.Detail
+					if detail == "" {
+						detail = row.Result
+					}
+				}
+				target := row.Hash
+				if len(target) > 8 {
+					target = target[:8]
+				}
+				logs.RecordAudit(context.Background(), st, log, filepath.Join(cfg.dataDir, "logs"), store.AuditRow{
+					At:     time.Now().Unix(),
+					Action: "自动同步",
+					Target: target,
+					Result: result,
+					Detail: detail,
+				})
+			}
+		}
+	}()
 
 	// --- http ----------------------------------------------------------------
 	engine := httpx.NewEngine(log)

@@ -45,6 +45,10 @@ func (h *Handler) login(c *gin.Context) {
 		apix.Fail(c, http.StatusBadRequest, "invalid_request", "username and password are required")
 		return
 	}
+	// Only the username, never the password: the audit middleware
+	// shows the attempted username on the login row (success or
+	// failure) instead of a blank target.
+	c.Set("auditUsername", req.Username)
 	token, expires, err := h.svc.Login(c.Request.Context(), req.Username, req.Password, c.ClientIP())
 	switch {
 	case errors.Is(err, ErrRateLimited):

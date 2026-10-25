@@ -51,6 +51,12 @@ const (
 	keyTimezone = "timezone" // IANA name, default Asia/Shanghai
 
 	keyShowWarnings = "show_warnings" // true | false, default true
+
+	keyDashIntervalSecs = "dash_interval_secs" // dashboard sample + poll interval, seconds, 1-60, default 3
+
+	keyAutoSyncEnabled = "auto_sync_enabled" // true | false, default true
+
+	keyAutoSyncIntervalSecs = "auto_sync_interval_secs" // auto-sync interval, seconds, 0 = on every change (debounced), 1-3600, default 600
 )
 
 // View is the full settings state exchanged with the frontend.
@@ -69,6 +75,11 @@ type View struct {
 	TextSelectable bool   `json:"textSelectable"`
 	Timezone       string `json:"timezone"`
 	ShowWarnings   bool   `json:"showWarnings"`
+
+	DashIntervalSecs int `json:"dashIntervalSecs"`
+
+	AutoSyncEnabled      bool `json:"autoSyncEnabled"`
+	AutoSyncIntervalSecs int  `json:"autoSyncIntervalSecs"`
 }
 
 // Update accepts partial changes; nil fields stay untouched.
@@ -87,6 +98,11 @@ type Update struct {
 	TextSelectable *bool   `json:"textSelectable"`
 	Timezone       *string `json:"timezone"`
 	ShowWarnings   *bool   `json:"showWarnings"`
+
+	DashIntervalSecs *int `json:"dashIntervalSecs"`
+
+	AutoSyncEnabled      *bool `json:"autoSyncEnabled"`
+	AutoSyncIntervalSecs *int  `json:"autoSyncIntervalSecs"`
 }
 
 func (s *Service) get(ctx context.Context, key, def string) (string, error) {
@@ -158,119 +174,219 @@ func (s *Service) Get(ctx context.Context) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
+	dashIntervalStr, err := s.get(ctx, keyDashIntervalSecs, "3")
+	if err != nil {
+		return View{}, err
+	}
+	dashInterval, _ := strconv.Atoi(dashIntervalStr)
+	if dashInterval < 1 || dashInterval > 60 {
+		dashInterval = 3
+	}
+	autoSyncEnabled, err := s.getBool(ctx, keyAutoSyncEnabled, true)
+	if err != nil {
+		return View{}, err
+	}
+	autoSyncIntervalStr, err := s.get(ctx, keyAutoSyncIntervalSecs, "600")
+	if err != nil {
+		return View{}, err
+	}
+	autoSyncInterval, _ := strconv.Atoi(autoSyncIntervalStr)
+	if autoSyncInterval < 0 || autoSyncInterval > 3600 {
+		autoSyncInterval = 600
+	}
 	return View{
-		WebRTCMode:        mode,
-		DNSFallback:       fallback,
-		DNSRespectRules:   respect,
-		NodeName:          nodeName,
-		LinkFormat:        linkFormat,
-		SkipCertVerify:    skipCert,
-		PublicHost:        publicHost,
-		ShowUserinfo:      showUserinfo,
-		UpdateIntervalHrs: interval,
-		TextSelectable:    textSelectable,
-		Timezone:          timezone,
-		ShowWarnings:      showWarnings,
+		WebRTCMode:           mode,
+		DNSFallback:          fallback,
+		DNSRespectRules:      respect,
+		NodeName:             nodeName,
+		LinkFormat:           linkFormat,
+		SkipCertVerify:       skipCert,
+		PublicHost:           publicHost,
+		ShowUserinfo:         showUserinfo,
+		UpdateIntervalHrs:    interval,
+		TextSelectable:       textSelectable,
+		Timezone:             timezone,
+		ShowWarnings:         showWarnings,
+		DashIntervalSecs:     dashInterval,
+		AutoSyncEnabled:      autoSyncEnabled,
+		AutoSyncIntervalSecs: autoSyncInterval,
 	}, nil
 }
 
-func (s *Service) Update(ctx context.Context, u Update) (View, error) {
+// GetAutoSync returns the effective auto-sync config for the checker
+// loop. SINGBOX_UI_AUTO_SYNC_MINUTES is a legacy fallback: it applies
+// only while the user has never saved either auto-sync setting (fresh
+// DBs, and the sync-scenario harness which drives the ticker through
+// env). Once either row exists, settings win outright.
+func (s *Service) GetAutoSync(ctx context.Context, envMin int) (bool, int, error) {
+	_, enabledOk, err := s.st.GetSetting(ctx, keyAutoSyncEnabled)
+	if err != nil {
+		return false, 0, err
+	}
+	_, intervalOk, err := s.st.GetSetting(ctx, keyAutoSyncIntervalSecs)
+	if err != nil {
+		return false, 0, err
+	}
+	if !enabledOk && !intervalOk && envMin > 0 {
+		return true, envMin * 60, nil
+	}
+	v, err := s.Get(ctx)
+	if err != nil {
+		return false, 0, err
+	}
+	return v.AutoSyncEnabled, v.AutoSyncIntervalSecs, nil
+}
+
+func (s *Service) Update(ctx context.Context, u Update) (View, string, error) {
+	old, err := s.Get(ctx)
+	if err != nil {
+		return View{}, "", err
+	}
+	var parts []string
+	addStr := func(key, oldVal, newVal string) {
+		if oldVal != newVal {
+			parts = append(parts, key+": "+oldVal+"→"+newVal)
+		}
+	}
+	addBool := func(key string, oldVal, newVal bool) {
+		addStr(key, strconv.FormatBool(oldVal), strconv.FormatBool(newVal))
+	}
+	addInt := func(key string, oldVal, newVal int) {
+		addStr(key, strconv.Itoa(oldVal), strconv.Itoa(newVal))
+	}
 	if u.WebRTCMode != nil {
 		switch *u.WebRTCMode {
 		case "proxy", "reject", "off":
 		default:
-			return View{}, errValidation("webrtcMode must be proxy, reject or off")
+			return View{}, "", errValidation("webrtcMode must be proxy, reject or off")
 		}
 		if err := s.st.SetSetting(ctx, keyWebRTCMode, *u.WebRTCMode); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addStr("webrtcMode", old.WebRTCMode, *u.WebRTCMode)
 	}
 	if u.DNSFallback != nil {
 		switch *u.DNSFallback {
 		case "foreign", "domestic":
 		default:
-			return View{}, errValidation("dnsFallback must be foreign or domestic")
+			return View{}, "", errValidation("dnsFallback must be foreign or domestic")
 		}
 		if err := s.st.SetSetting(ctx, keyDNSFallback, *u.DNSFallback); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addStr("dnsFallback", old.DNSFallback, *u.DNSFallback)
 	}
 	if u.DNSRespectRules != nil {
 		if err := s.st.SetSetting(ctx, keyDNSRespectRules, strconv.FormatBool(*u.DNSRespectRules)); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addBool("dnsRespectRules", old.DNSRespectRules, *u.DNSRespectRules)
 	}
 	if u.NodeName != nil {
 		name := strings.TrimSpace(*u.NodeName)
 		if len([]rune(name)) > 64 || strings.ContainsAny(name, "\r\n") {
-			return View{}, errValidation("nodeName must be at most 64 characters on one line")
+			return View{}, "", errValidation("nodeName must be at most 64 characters on one line")
 		}
 		if err := s.st.SetSetting(ctx, keyNodeName, name); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addStr("nodeName", old.NodeName, name)
 	}
 	if u.LinkFormat != nil {
 		switch *u.LinkFormat {
 		case "clash", "singbox":
 		default:
-			return View{}, errValidation("linkFormat must be clash or singbox")
+			return View{}, "", errValidation("linkFormat must be clash or singbox")
 		}
 		if err := s.st.SetSetting(ctx, keyLinkFormat, *u.LinkFormat); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addStr("linkFormat", old.LinkFormat, *u.LinkFormat)
 	}
 	if u.SkipCertVerify != nil {
 		if err := s.st.SetSetting(ctx, keySkipCertVerify, strconv.FormatBool(*u.SkipCertVerify)); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addBool("skipCertVerify", old.SkipCertVerify, *u.SkipCertVerify)
 	}
 	if u.PublicHost != nil {
 		host := strings.TrimSpace(*u.PublicHost)
 		if host != "" && (strings.ContainsAny(host, " \t\r\n/") || strings.Contains(host, "://")) {
-			return View{}, errValidation("publicHost must be a bare domain or IP (no scheme, no path)")
+			return View{}, "", errValidation("publicHost must be a bare domain or IP (no scheme, no path)")
 		}
 		if len(host) > 255 {
-			return View{}, errValidation("publicHost is too long")
+			return View{}, "", errValidation("publicHost is too long")
 		}
 		if err := s.st.SetSetting(ctx, keyPublicHost, host); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addStr("publicHost", old.PublicHost, host)
 	}
 	if u.ShowUserinfo != nil {
 		if err := s.st.SetSetting(ctx, keyShowUserinfo, strconv.FormatBool(*u.ShowUserinfo)); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addBool("showUserinfo", old.ShowUserinfo, *u.ShowUserinfo)
 	}
 	if u.TextSelectable != nil {
 		if err := s.st.SetSetting(ctx, keyTextSelectable, strconv.FormatBool(*u.TextSelectable)); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addBool("textSelectable", old.TextSelectable, *u.TextSelectable)
 	}
 	if u.UpdateIntervalHrs != nil {
 		if *u.UpdateIntervalHrs < 0 || *u.UpdateIntervalHrs > 720 {
-			return View{}, errValidation("updateIntervalHours must be between 0 and 720")
+			return View{}, "", errValidation("updateIntervalHours must be between 0 and 720")
 		}
 		if err := s.st.SetSetting(ctx, keyUpdateIntervalHrs, strconv.Itoa(*u.UpdateIntervalHrs)); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addInt("updateIntervalHours", old.UpdateIntervalHrs, *u.UpdateIntervalHrs)
 	}
 	if u.ShowWarnings != nil {
 		if err := s.st.SetSetting(ctx, keyShowWarnings, strconv.FormatBool(*u.ShowWarnings)); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addBool("showWarnings", old.ShowWarnings, *u.ShowWarnings)
+	}
+	if u.DashIntervalSecs != nil {
+		if *u.DashIntervalSecs < 1 || *u.DashIntervalSecs > 60 {
+			return View{}, "", errValidation("dashIntervalSecs must be between 1 and 60")
+		}
+		if err := s.st.SetSetting(ctx, keyDashIntervalSecs, strconv.Itoa(*u.DashIntervalSecs)); err != nil {
+			return View{}, "", err
+		}
+		addInt("dashIntervalSecs", old.DashIntervalSecs, *u.DashIntervalSecs)
+	}
+	if u.AutoSyncEnabled != nil {
+		if err := s.st.SetSetting(ctx, keyAutoSyncEnabled, strconv.FormatBool(*u.AutoSyncEnabled)); err != nil {
+			return View{}, "", err
+		}
+		addBool("autoSyncEnabled", old.AutoSyncEnabled, *u.AutoSyncEnabled)
+	}
+	if u.AutoSyncIntervalSecs != nil {
+		if *u.AutoSyncIntervalSecs < 0 || *u.AutoSyncIntervalSecs > 3600 {
+			return View{}, "", errValidation("autoSyncIntervalSecs must be between 0 and 3600")
+		}
+		if err := s.st.SetSetting(ctx, keyAutoSyncIntervalSecs, strconv.Itoa(*u.AutoSyncIntervalSecs)); err != nil {
+			return View{}, "", err
+		}
+		addInt("autoSyncIntervalSecs", old.AutoSyncIntervalSecs, *u.AutoSyncIntervalSecs)
 	}
 	if u.Timezone != nil {
 		zone := strings.TrimSpace(*u.Timezone)
 		// LoadLocation("") silently means UTC, so reject empty outright.
 		if zone == "" {
-			return View{}, errValidation("timezone must be a valid IANA timezone name")
+			return View{}, "", errValidation("timezone must be a valid IANA timezone name")
 		}
 		if _, err := time.LoadLocation(zone); err != nil {
-			return View{}, errValidation("timezone must be a valid IANA timezone name")
+			return View{}, "", errValidation("timezone must be a valid IANA timezone name")
 		}
 		if err := s.st.SetSetting(ctx, keyTimezone, zone); err != nil {
-			return View{}, err
+			return View{}, "", err
 		}
+		addStr("timezone", old.Timezone, zone)
 	}
-	return s.Get(ctx)
+	v, err := s.Get(ctx)
+	return v, strings.Join(parts, "；"), err
 }

@@ -1,8 +1,7 @@
 import { useState, type ReactNode } from "react";
-import { Eye, EyeOff, MonitorSmartphone, User } from "lucide-react";
+import { Eye, EyeOff, User } from "lucide-react";
 import { toast } from "sonner";
 
-import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
@@ -103,9 +102,6 @@ export default function SecurityPage({
   const [formError, setFormError] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const [confirmRevoke, setConfirmRevoke] = useState(false);
-  const [revoking, setRevoking] = useState(false);
-
   const name = newUsername.trim();
   const nameChanged = name !== "" && name !== username;
   const passChanged = nextPassword !== "";
@@ -159,23 +155,6 @@ export default function SecurityPage({
       setFormError(authErrorText(err, "保存失败，请重试"));
     } finally {
       setSaving(false);
-    }
-  };
-
-  const runRevoke = async () => {
-    setConfirmRevoke(false);
-    setRevoking(true);
-    try {
-      const res = await api.revokeOtherSessions();
-      toast.success(
-        res.revoked > 0
-          ? `已退出 ${res.revoked} 个其他会话`
-          : "没有其他会话需要退出",
-      );
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "操作失败，请重试");
-    } finally {
-      setRevoking(false);
     }
   };
 
@@ -241,29 +220,6 @@ export default function SecurityPage({
           </Button>
         </form>
       </SectionCard>
-
-      <SectionCard
-        icon={<MonitorSmartphone className="h-[18px] w-[18px]" />}
-        title="会话"
-        desc="怀疑账号被他人使用时，先修改密码，再退出其他设备。"
-      >
-        <Button
-          variant="outline"
-          disabled={revoking}
-          onClick={() => setConfirmRevoke(true)}
-        >
-          退出其他设备
-        </Button>
-      </SectionCard>
-
-      <ConfirmDialog
-        open={confirmRevoke}
-        onOpenChange={setConfirmRevoke}
-        title="退出其他设备"
-        description="确定要退出除当前设备外的所有登录吗？当前设备不受影响。"
-        confirmLabel="退出其他设备"
-        onConfirm={runRevoke}
-      />
     </div>
   );
 }
