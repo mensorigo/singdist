@@ -39,6 +39,7 @@ import {
   type TrojanParams,
   type TuicParams,
 } from "@/lib/api";
+import { customSelectOption } from "@/lib/custom-option";
 import { cn } from "@/lib/utils";
 import TemplatesPanel from "@/pages/TemplatesPanel";
 
@@ -118,6 +119,20 @@ const SS2022_KEY_LEN: Record<string, number> = {
   "2022-blake3-aes-256-gcm": 32,
   "2022-blake3-chacha20-poly1305": 32,
 };
+
+// Fixed option values for the form's Select dropdowns. These must match
+// the SelectItem values rendered below; customSelectOption uses them
+// only to decide whether the current value needs a temporary option.
+const OBFS_OPTIONS = ["none", "salamander"] as const;
+const TUIC_CONGESTION_OPTIONS = ["bbr", "cubic", "new_reno"] as const;
+const SS_METHOD_OPTIONS = [
+  "2022-blake3-aes-128-gcm",
+  "2022-blake3-aes-256-gcm",
+  "2022-blake3-chacha20-poly1305",
+  "aes-128-gcm",
+  "aes-256-gcm",
+  "chacha20-ietf-poly1305",
+] as const;
 
 function randomBase64(bytes: number): string {
   const a = new Uint8Array(bytes);
@@ -506,6 +521,19 @@ function InboundFormDialog({
   );
   const [ssPassword, setSsPassword] = useState(sp?.password ?? "");
 
+  // Temporary dropdown options for values outside the fixed lists (e.g.
+  // imported from a config file): shown while current, gone once the
+  // user picks a standard option.
+  const obfsCustom = customSelectOption(
+    OBFS_OPTIONS,
+    obfs === "" ? "none" : obfs,
+  );
+  const tuicCongestionCustom = customSelectOption(
+    TUIC_CONGESTION_OPTIONS,
+    tuicCongestion,
+  );
+  const ssMethodCustom = customSelectOption(SS_METHOD_OPTIONS, ssMethod);
+
   const ap = item?.protocol === "anytls" ? (item.params as AnyTLSParams) : null;
   const [alPassword, setAlPassword] = useState(ap?.password ?? "");
   const [alSni, setAlSni] = useState(ap?.sni ?? "");
@@ -820,13 +848,12 @@ function InboundFormDialog({
                     <SelectContent>
                       <SelectItem value="none">无</SelectItem>
                       <SelectItem value="salamander">salamander</SelectItem>
-                      {/* Defensive: a row whose obfs is outside the
-                      options (legacy/future value) shows its raw
-                      value instead of a blank Select, and saving
-                      without touching it preserves it. */}
-                      {obfs !== "" && obfs !== "salamander" && (
-                        <SelectItem value={obfs}>
-                          {obfs}（未知值，保存后保留）
+                      {/* Temporary option for a value outside the fixed
+                      list: shown while current, gone once a standard
+                      option is picked. */}
+                      {obfsCustom && (
+                        <SelectItem value={obfsCustom.value}>
+                          {obfsCustom.label}
                         </SelectItem>
                       )}
                     </SelectContent>
@@ -901,14 +928,10 @@ function InboundFormDialog({
                       <SelectItem value="bbr">BBR（推荐）</SelectItem>
                       <SelectItem value="cubic">Cubic</SelectItem>
                       <SelectItem value="new_reno">New Reno</SelectItem>
-                      {/* Defensive: same unknown-value safeguard as
-                      obfs above — show the raw value, preserve it
-                      on save unless the user picks another option. */}
-                      {!["bbr", "cubic", "new_reno"].includes(
-                        tuicCongestion,
-                      ) && (
-                        <SelectItem value={tuicCongestion}>
-                          {tuicCongestion}（未知值，保存后保留）
+                      {/* Temporary option, same as obfs above. */}
+                      {tuicCongestionCustom && (
+                        <SelectItem value={tuicCongestionCustom.value}>
+                          {tuicCongestionCustom.label}
                         </SelectItem>
                       )}
                     </SelectContent>
@@ -958,6 +981,13 @@ function InboundFormDialog({
                         chacha20-ietf-poly1305
                       </SelectItem>
                     </SelectGroup>
+                    {/* Temporary option for a method outside the fixed
+                    lists, same as obfs/tuic above. */}
+                    {ssMethodCustom && (
+                      <SelectItem value={ssMethodCustom.value}>
+                        {ssMethodCustom.label}
+                      </SelectItem>
+                    )}
                   </SelectContent>
                 </Select>
               </div>
