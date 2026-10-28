@@ -571,6 +571,18 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 			}
 		}
 		if bu == nil {
+			// Name collision with a panel sub: panel names are
+			// panel-owned identities, so a file user carrying one
+			// is never a stranger — even when the baseline never
+			// had it (e.g. the sub was created after the
+			// baseline). Panel wins: drop it (no append) and say
+			// reverted, not passthrough — otherwise merge's name
+			// dedupe would drop it silently while the log claims
+			// it was preserved.
+			if _, ok := panel.byName[name]; ok {
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "]", detail: "与面板订阅同名，恢复面板值（文件用户不保留）"})
+				continue
+			}
 			// Unknown user: preserved verbatim (never
 			// auto-created — a bare user entry lacks template,
 			// limit, expiry and token, so a subscription cannot

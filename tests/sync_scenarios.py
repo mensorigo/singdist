@@ -316,6 +316,14 @@ def s1_passthrough(p):
               bool(change(rows, "passthrough", item)), str(rows))
     with open(os.path.join(DATA, "logs", "config-changes.log")) as f:
         logtxt = f.read()
+    # Guard: the panel has no log-level setting. If one is ever
+    # added, classifyLog's level branch must flip from
+    # passthrough to revert in the same change — this check
+    # fails until then.
+    settings = p.api("GET", "/api/settings")
+    check("S1", "no log-level panel setting (guard)",
+          "logLevel" not in settings and "log_level" not in settings,
+          str(sorted(settings.keys())))
     check("S1", "config-changes.log has route line", "route" in logtxt)
 
 
@@ -569,6 +577,36 @@ def s9_unknown_user(p):
           any(u["name"] == "STRANGER" for u in users), str(users))
     check("S9", "unknown-user passthrough row",
           bool(change(p.changes_for(row["id"]), "passthrough", "inbounds[V9].users[STRANGER]")))
+
+
+def s9b_stranger_panel_name_collision(p):
+    v = p.mk_inbound("V9b", "vless-reality", 25620, vless_params("s9b.example.com"))
+    t = p.mk_template("T9b", [v["id"]])
+    p.mk_sub("SUB9b", t["id"])
+    converge(p, "S9b")
+    # Panel creates a new sub AFTER the baseline; file adds a
+    # same-name user with a different uuid. Baseline never had
+    # COLLIDE, so without the fix this would be a stranger
+    # passthrough that merge's name dedupe then drops silently.
+    p.mk_sub("COLLIDE", t["id"])
+    panel_uuid = p.sub_named("COLLIDE")["uuid"]
+    file_uuid = str(uuid.uuid4())
+
+    def edit(doc):
+        target_inbound(doc, "V9b")["users"].append(
+            {"name": "COLLIDE", "uuid": file_uuid,
+             "flow": "xtls-rprx-vision"})
+    edit_target(edit)
+    row = p.sync()
+    users = target_inbound(read_target(), "V9b")["users"]
+    collide = [u for u in users if u["name"] == "COLLIDE"]
+    check("S9b", "panel uuid kept, single COLLIDE",
+          len(collide) == 1 and collide[0]["uuid"] == panel_uuid, str(users))
+    rows = p.changes_for(row["id"])
+    check("S9b", "collision revert row",
+          bool(change(rows, "reverted", "inbounds[V9b].users[COLLIDE]")), str(rows))
+    check("S9b", "no passthrough row for COLLIDE",
+          not change(rows, "passthrough", "inbounds[V9b].users[COLLIDE]"), str(rows))
 
 
 def s10a_hy2_uniform_host(p):
@@ -1195,6 +1233,34 @@ def s0h_simultaneous_panel_wins(p):
           target_inbound(read_target(), "V0h")["listen_port"] == 25601)
 
 
+def s0i_panel_file_different_fields(p):
+    v = p.mk_inbound("V0i", "vless-reality", 25610, vless_params("s0i.example.com"))
+    t = p.mk_template("T0i", [v["id"]])
+    p.mk_sub("SUB0i", t["id"])
+    converge(p, "S0i")
+    cur = p.inbound_named("V0i")
+    # Panel changes A (port); file changes B (sni) — different fields.
+    p.api("PATCH", f"/api/inbounds/{v['id']}",
+          {"name": "V0i", "port": 25611, "params": cur["params"]})
+
+    def edit(doc):
+        target_inbound(doc, "V0i")["tls"]["server_name"] = "evil.example.com"
+    edit_target(edit)
+    row = p.sync()
+    check("S0i", "panel port kept", p.inbound_named("V0i")["port"] == 25611)
+    check("S0i", "target port is panel port",
+          target_inbound(read_target(), "V0i")["listen_port"] == 25611)
+    check("S0i", "target sni is panel sni",
+          target_inbound(read_target(), "V0i")["tls"]["server_name"] == "s0i.example.com")
+    rows = change(p.changes_for(row["id"]), "reverted", "inbounds[V0i].sni")
+    check("S0i", "file sni reverted row",
+          len(rows) == 1 and rows[0]["oldValue"] == "s0i.example.com"
+          and rows[0]["newValue"] == "evil.example.com", str(rows))
+    check("S0i", "no port revert row (panel edit converges silently)",
+          len(change(p.changes_for(row["id"]), "reverted", "inbounds[V0i].listen_port")) == 0,
+          str(p.changes_for(row["id"])))
+
+
 def s28_first_import(p):
     # Fresh panel, hand-written file: modelled vless + trojan + SS
     # (tier-2 custom method) are imported once as panel rows;
@@ -1325,14 +1391,14 @@ SCENARIOS = [
     ("S0", s0_panel_only, 0), ("S0b", s0b_panel_password_kept, 0),
     ("S0c", s0c_panel_rename_kept, 0), ("S0d", s0d_panel_host_kept, 0),
     ("S0e", s0e_panel_disable_wins, 0), ("S0f", s0f_panel_flow_kept, 0),
-    ("S0g", s0g_steady_state_silent, 0), ("S0h", s0h_simultaneous_panel_wins, 0),
+    ("S0g", s0g_steady_state_silent, 0), ("S0h", s0h_simultaneous_panel_wins, 0), ("S0i", s0i_panel_file_different_fields, 0),
     ("S1", s1_passthrough, 0),
     ("S2", s2_formatting, 0), ("S3", s3_imports, 0),
     ("S4a", s4a_hy2_uniform, 0), ("S4b", s4b_hy2_divergent, 0),
     ("S5a", s5a_uuid, 0), ("S5b", s5b_rename, 0),
     ("S6a", s6a_new_trojan, 0), ("S6b", s6b_unknown_protocol, 0),
     ("S7", s7_deletion, 0), ("S8", s8_user_absence, 0),
-    ("S9", s9_unknown_user, 0), ("S10a", s10a_hy2_uniform_host, 0),
+    ("S9", s9_unknown_user, 0), ("S9b", s9b_stranger_panel_name_collision, 0), ("S10a", s10a_hy2_uniform_host, 0),
     ("S10b", s10b_hy2_divergent_host, 0), ("S11", s11_invalid_json, 0),
     ("S12", s12_duplicate_tag, 0), ("S13", s13_bad_entries, 0),
     ("S14", s14_reserved_port, 0), ("S15a", s15a_key_rotation, 0),
