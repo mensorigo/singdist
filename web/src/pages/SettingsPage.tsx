@@ -492,7 +492,7 @@ export default function SettingsPage({
                 }
               />
             </Row>
-            <Row label="同步间隔" hint="0 = 每次修改后自动同步；大于 0 = 到期自动同步">
+            <Row label="同步间隔" hint="已由防抖 5 秒/30 秒接管，此项不再生效">
               <div className="flex items-center gap-2">
                 <Input
                   type="number"

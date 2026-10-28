@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -281,6 +282,7 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		var lastSeen string
+		var lastFileHash string
 		for {
 			select {
 			case <-ctx.Done():
@@ -297,7 +299,23 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 				// Reset: re-enable must re-discover the drift
 				// instead of treating it as already seen.
 				lastSeen = ""
+				lastFileHash = ""
 				continue
+			}
+			// Cheap pre-check: the poll only discovers FILE-side changes
+			// (panel changes notify via the audit hook), so if the file
+			// bytes are unchanged since the last poll there is no file
+			// drift to discover — skip the full Status() (which
+			// regenerates + classifies + merges). A failed read is
+			// treated as changed (Status handles missing/unreadable).
+			if fb, ferr := os.ReadFile(syncTarget); ferr == nil {
+				fh := fmt.Sprintf("%x", sha256.Sum256(fb))
+				if fh == lastFileHash {
+					continue
+				}
+				lastFileHash = fh
+			} else {
+				lastFileHash = ""
 			}
 			status, err := syncSvc.Status(pctx)
 			if err != nil {

@@ -198,6 +198,20 @@ func (s *Service) Sync(ctx context.Context) (store.SyncLogRow, error) {
 	return s.syncInternal(ctx, "sync")
 }
 
+// setBlockedHash records (or clears, with "") the blocked merged-config
+// hash. A failed SET is Error (the failed input would not be blocked
+// and would retry in a loop); a failed CLEAR is Warn (the stale block
+// is re-cleared on the next InSync convergence).
+func (s *Service) setBlockedHash(ctx context.Context, hash string) {
+	if err := s.st.SetBlockedHash(ctx, hash); err != nil {
+		if hash == "" {
+			s.logger.Warn("coresync: clear blocked hash failed", "error", err)
+		} else {
+			s.logger.Error("coresync: set blocked hash failed", "error", err)
+		}
+	}
+}
+
 // AutoSync is the debouncer's entry point: it compares the desired
 // config against the target first and only runs the pipeline when
 // they differ, so idle pushes leave no log rows and no restarts.
@@ -218,7 +232,7 @@ func (s *Service) AutoSync(ctx context.Context) (store.SyncLogRow, bool, error) 
 		// drift poll triggers a run for exactly this case, since
 		// InSync alone never notifies.)
 		if baseline, berr := s.st.GetSyncState(ctx); berr == nil && baseline.BlockedHash != "" {
-			_ = s.st.SetBlockedHash(ctx, "")
+			s.setBlockedHash(ctx, "")
 			s.logger.Info("coresync: auto-sync cleared stale input block (converged)", "blocked", baseline.BlockedHash)
 		}
 		return store.SyncLogRow{}, false, nil
@@ -405,7 +419,7 @@ func (s *Service) syncInternal(ctx context.Context, action string) (store.SyncLo
 			all := append(append([]change{}, res.changes...), importOutcomes...)
 			s.writeChangeRows(ctx, row.ID, all)
 			_ = s.st.SetSyncState(ctx, store.SyncState{LastDoc: string(fileBytes), LastHash: hashBytes(fileBytes), PassthroughTags: s.mergedPassTags(ctx, merged), UpdatedAt: nowUnix()})
-			_ = s.st.SetBlockedHash(ctx, "")
+			s.setBlockedHash(ctx, "")
 			_ = s.st.MarkPendingAuditsApplied(ctx, beforeID, mergedHash)
 		}
 		return row, rerr
@@ -445,7 +459,7 @@ applyMerged:
 				rows := append(append([]change{}, importOutcomes...), change{action: changeDroppedIllegal, item: "透传内容", detail: "合并配置校验失败，已丢弃透传内容并用面板配置覆盖：" + aerr.Error()})
 				s.writeChangeRows(ctx, row.ID, rows)
 				_ = s.st.SetSyncState(ctx, store.SyncState{LastDoc: string(panelOnlyDoc), LastHash: panelOnlyHash, UpdatedAt: nowUnix()})
-				_ = s.st.SetBlockedHash(ctx, "")
+				s.setBlockedHash(ctx, "")
 				_ = s.st.MarkPendingAuditsApplied(ctx, beforeID, panelOnlyHash)
 			}
 			return row, rerr
@@ -468,7 +482,7 @@ applyMerged:
 			row, rerr := s.log(ctx, action, "restart_failed", mergedHash, aerr.Error())
 			if rerr == nil {
 				s.writeChangeRows(ctx, row.ID, rows)
-				_ = s.st.SetBlockedHash(ctx, mergedHash)
+				s.setBlockedHash(ctx, mergedHash)
 			}
 			return row, rerr
 		}
@@ -499,7 +513,7 @@ applyMerged:
 			bctx = context.Background()
 		}
 		_ = s.st.SetSyncState(bctx, store.SyncState{LastDoc: string(mergedDoc), LastHash: mergedHash, PassthroughTags: s.mergedPassTags(bctx, merged), UpdatedAt: nowUnix()})
-		_ = s.st.SetBlockedHash(bctx, "")
+		s.setBlockedHash(bctx, "")
 		// Mark every still-pending audit row from before this sync
 		// as applied by it, so the Logs page can show 待同步 / 已应
 		// 用 per edit. Best-effort: a marking failure must not fail
@@ -549,7 +563,7 @@ func (s *Service) applyAndRecord(ctx context.Context, action string, beforeID in
 			row, rerr := s.log(ctx, action, "restart_failed", hash, aerr.Error())
 			if rerr == nil {
 				s.writeChangeRows(ctx, row.ID, append(append([]change{}, rows...), note))
-				_ = s.st.SetBlockedHash(ctx, hash)
+				s.setBlockedHash(ctx, hash)
 			}
 			return row, rerr
 		}
@@ -559,7 +573,7 @@ func (s *Service) applyAndRecord(ctx context.Context, action string, beforeID in
 	if rerr == nil {
 		s.writeChangeRows(ctx, row.ID, rows)
 		_ = s.st.SetSyncState(ctx, store.SyncState{LastDoc: string(doc), LastHash: hash, UpdatedAt: nowUnix()})
-		_ = s.st.SetBlockedHash(ctx, "")
+		s.setBlockedHash(ctx, "")
 		_ = s.st.MarkPendingAuditsApplied(ctx, beforeID, hash)
 	}
 	return row, rerr
