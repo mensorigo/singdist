@@ -217,16 +217,24 @@ func (s *Store) NodeInboundIDs(ctx context.Context, nodeID int64) ([]int64, erro
 	return out, rows.Err()
 }
 
+// InboundAssignment is one inbound -> node assignment. Port 0 means
+// "use the inbound's own port on that node"; >0 overrides it.
+type InboundAssignment struct {
+	NodeID int64
+	Port   int
+}
+
 // AllInboundNodes returns every assignment row (used by the renderer to
 // group inbounds per node in one query).
 type InboundNodeRow struct {
 	InboundID int64
 	NodeID    int64
+	Port      int // 0 = the inbound's own port
 }
 
 func (s *Store) AllInboundNodes(ctx context.Context) ([]InboundNodeRow, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT inbound_id, node_id FROM inbound_nodes ORDER BY node_id, inbound_id`)
+		`SELECT inbound_id, node_id, port FROM inbound_nodes ORDER BY node_id, inbound_id`)
 	if err != nil {
 		return nil, fmt.Errorf("store: all inbound nodes: %w", err)
 	}
@@ -234,7 +242,46 @@ func (s *Store) AllInboundNodes(ctx context.Context) ([]InboundNodeRow, error) {
 	out := []InboundNodeRow{}
 	for rows.Next() {
 		var r InboundNodeRow
-		if err := rows.Scan(&r.InboundID, &r.NodeID); err != nil {
+		if err := rows.Scan(&r.InboundID, &r.NodeID, &r.Port); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// NodeInboundAssignments returns one node's assignments, with
+// per-node ports (used by the push builder).
+func (s *Store) NodeInboundAssignments(ctx context.Context, nodeID int64) ([]InboundNodeRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT inbound_id, node_id, port FROM inbound_nodes WHERE node_id = ? ORDER BY inbound_id`, nodeID)
+	if err != nil {
+		return nil, fmt.Errorf("store: node inbound assignments: %w", err)
+	}
+	defer rows.Close()
+	out := []InboundNodeRow{}
+	for rows.Next() {
+		var r InboundNodeRow
+		if err := rows.Scan(&r.InboundID, &r.NodeID, &r.Port); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// InboundNodes returns one inbound's assignments, with per-node ports.
+func (s *Store) InboundNodes(ctx context.Context, inboundID int64) ([]InboundNodeRow, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT inbound_id, node_id, port FROM inbound_nodes WHERE inbound_id = ? ORDER BY node_id`, inboundID)
+	if err != nil {
+		return nil, fmt.Errorf("store: inbound nodes: %w", err)
+	}
+	defer rows.Close()
+	out := []InboundNodeRow{}
+	for rows.Next() {
+		var r InboundNodeRow
+		if err := rows.Scan(&r.InboundID, &r.NodeID, &r.Port); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -243,7 +290,7 @@ func (s *Store) AllInboundNodes(ctx context.Context) ([]InboundNodeRow, error) {
 }
 
 // SetInboundNodes atomically replaces an inbound's node assignment.
-func (s *Store) SetInboundNodes(ctx context.Context, inboundID int64, nodeIDs []int64) error {
+func (s *Store) SetInboundNodes(ctx context.Context, inboundID int64, nodes []InboundAssignment) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -253,10 +300,10 @@ func (s *Store) SetInboundNodes(ctx context.Context, inboundID int64, nodeIDs []
 		`DELETE FROM inbound_nodes WHERE inbound_id = ?`, inboundID); err != nil {
 		return err
 	}
-	for _, nid := range nodeIDs {
+	for _, n := range nodes {
 		if _, err := tx.ExecContext(ctx,
-			`INSERT INTO inbound_nodes (inbound_id, node_id) VALUES (?, ?)`,
-			inboundID, nid); err != nil {
+			`INSERT INTO inbound_nodes (inbound_id, node_id, port) VALUES (?, ?, ?)`,
+			inboundID, n.NodeID, n.Port); err != nil {
 			return err
 		}
 	}

@@ -168,10 +168,17 @@ func (s *Service) List(ctx context.Context) (ListResult, error) {
 		v := View{
 			ID: row.ID, Name: row.Name, Protocol: row.Protocol, Port: row.Port,
 			Params: json.RawMessage(row.Params), Enabled: row.Enabled,
+			RunLocal: row.RunLocal,
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 			Status: "unknown",
 		}
-		if available {
+		if !row.RunLocal {
+			// Nodes-only: the local core never runs it, so there
+			// is no local state to compare against — and it must
+			// not match a different local inbound that happens to
+			// share its port.
+			v.Status = "remote"
+		} else if available {
 			m := matchRunning(row, running)
 			if m != nil {
 				matched[m.Port] = true
@@ -221,7 +228,7 @@ func (s *Service) ImportIfEmpty(ctx context.Context, log *slog.Logger) int {
 			continue
 		}
 		params := spec.importParams(&r)
-		if _, err := s.st.CreateInbound(ctx, name, protocol, r.Port, params, nowUnix()); err != nil {
+		if _, err := s.st.CreateInbound(ctx, name, protocol, r.Port, params, true, nowUnix()); err != nil {
 			log.Warn("inbounds: import from running config failed", "tag", r.Tag, "err", err)
 			continue
 		}

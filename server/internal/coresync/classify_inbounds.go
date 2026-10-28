@@ -457,12 +457,19 @@ func classifyMatchedInbound(tag string, oldIb, fileIb map[string]any, row *store
 		res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]", detail: "协议不能原地变更（" + row.Protocol + "→" + proto + "），恢复面板值"})
 		return
 	}
-	if !row.Enabled {
-		// Disabled row: the file copy is reverted (regen drops it).
-		// An unchanged file copy converges silently via regen; only
-		// a changed copy earns a row.
+	if !row.Enabled || !row.RunLocal {
+		// Disabled row, or nodes-only row: the file copy is reverted
+		// (regen drops it — Generate excludes both). An unchanged
+		// file copy converges silently via regen; only a changed
+		// copy earns a row. The tag stays panel-owned either way:
+		// a nodes-only row must not let a stale local copy linger
+		// as passthrough.
 		if !jsonEqual(oldIb, fileIb) {
-			res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]", detail: "面板已停用该入站，文件改动不采纳"})
+			detail := "面板已停用该入站，文件改动不采纳"
+			if row.Enabled {
+				detail = "该入站仅跑在节点上，主服务器不跑，文件副本不采纳"
+			}
+			res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]", detail: detail})
 		}
 		return
 	}

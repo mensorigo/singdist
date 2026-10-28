@@ -26,12 +26,12 @@ func seedPayloadStore(t *testing.T) (*store.Store, *certs.Manager, store.NodeRow
 
 	now := int64(1700000000)
 	vlessID, err := st.CreateInbound(ctx, "v1", "vless-reality", 443,
-		`{"sni":"example.com","publicKey":"k","privateKey":"p","shortId":"","flow":"xtls-rprx-vision"}`, now)
+		`{"sni":"example.com","publicKey":"k","privateKey":"p","shortId":"","flow":"xtls-rprx-vision"}`, true, now)
 	if err != nil {
 		t.Fatalf("CreateInbound vless: %v", err)
 	}
 	ssID, err := st.CreateInbound(ctx, "ss1", "shadowsocks", 8388,
-		`{"method":"2022-blake3-aes-128-gcm","password":"pw"}`, now)
+		`{"method":"2022-blake3-aes-128-gcm","password":"pw"}`, true, now)
 	if err != nil {
 		t.Fatalf("CreateInbound ss: %v", err)
 	}
@@ -56,10 +56,10 @@ func seedPayloadStore(t *testing.T) (*store.Store, *certs.Manager, store.NodeRow
 	if err != nil {
 		t.Fatalf("GetNode: %v", err)
 	}
-	if err := st.SetInboundNodes(ctx, vlessID, []int64{nodeID}); err != nil {
+	if err := st.SetInboundNodes(ctx, vlessID, []store.InboundAssignment{{NodeID: nodeID}}); err != nil {
 		t.Fatalf("SetInboundNodes vless: %v", err)
 	}
-	if err := st.SetInboundNodes(ctx, ssID, []int64{nodeID}); err != nil {
+	if err := st.SetInboundNodes(ctx, ssID, []store.InboundAssignment{{NodeID: nodeID}}); err != nil {
 		t.Fatalf("SetInboundNodes ss: %v", err)
 	}
 	return st, cm, *node, vlessID, ssID
@@ -120,7 +120,7 @@ func TestBuildPushUnassignedAndDisabled(t *testing.T) {
 
 	// An unassigned inbound must not appear in the payload.
 	if _, err := st.CreateInbound(ctx, "orphan", "trojan", 8443,
-		`{"password":"pw","sni":""}`, now); err != nil {
+		`{"password":"pw","sni":""}`, true, now); err != nil {
 		t.Fatalf("CreateInbound orphan: %v", err)
 	}
 	p, _, err := BuildPush(ctx, st, cm, node)
@@ -173,11 +173,11 @@ func TestBuildPushCertRequired(t *testing.T) {
 	now := int64(1700000000)
 
 	hy2ID, err := st.CreateInbound(ctx, "hy1", "hysteria2", 8443,
-		`{"password":"pw","upMbps":0,"downMbps":0,"obfs":"","obfsPassword":""}`, now)
+		`{"password":"pw","upMbps":0,"downMbps":0,"obfs":"","obfsPassword":""}`, true, now)
 	if err != nil {
 		t.Fatalf("CreateInbound hy2: %v", err)
 	}
-	if err := st.SetInboundNodes(ctx, hy2ID, []int64{node.ID}); err != nil {
+	if err := st.SetInboundNodes(ctx, hy2ID, []store.InboundAssignment{{NodeID: node.ID}}); err != nil {
 		t.Fatalf("SetInboundNodes hy2: %v", err)
 	}
 
@@ -196,5 +196,53 @@ func TestBuildPushCertRequired(t *testing.T) {
 	}
 	if p.Cert == nil || p.Cert.Certificate == "" || p.Cert.Key == "" {
 		t.Fatalf("BuildPush cert: got %+v, want embedded cert+key", p.Cert)
+	}
+}
+
+// A per-node port override replaces the inbound's own port in the
+// payload (and changes the hash, so the pusher picks it up); port 0
+// keeps the inbound's own port.
+func TestBuildPushNodePortOverride(t *testing.T) {
+	ctx := context.Background()
+	st, cm, node, vlessID, ssID := seedPayloadStore(t)
+
+	_, h0, err := BuildPush(ctx, st, cm, node)
+	if err != nil {
+		t.Fatalf("BuildPush baseline: %v", err)
+	}
+	// Seed v1 runs on 443; override it to 8443 on this node.
+	if err := st.SetInboundNodes(ctx, vlessID, []store.InboundAssignment{{NodeID: node.ID, Port: 8443}}); err != nil {
+		t.Fatalf("SetInboundNodes override: %v", err)
+	}
+	p, h1, err := BuildPush(ctx, st, cm, node)
+	if err != nil {
+		t.Fatalf("BuildPush override: %v", err)
+	}
+	if h1 == h0 {
+		t.Fatalf("BuildPush hash: override did not change the hash")
+	}
+	byName := map[string]PushInbound{}
+	for _, ib := range p.Inbounds {
+		byName[ib.Name] = ib
+	}
+	if byName["v1"].Port != 8443 {
+		t.Fatalf("BuildPush v1 port: got %d, want 8443 (override)", byName["v1"].Port)
+	}
+	if byName["ss1"].Port != 8388 {
+		t.Fatalf("BuildPush ss1 port: got %d, want 8388 (no override)", byName["ss1"].Port)
+	}
+	// Back to port 0: the inbound's own port returns.
+	if err := st.SetInboundNodes(ctx, vlessID, []store.InboundAssignment{{NodeID: node.ID, Port: 0}}); err != nil {
+		t.Fatalf("SetInboundNodes reset: %v", err)
+	}
+	p, _, err = BuildPush(ctx, st, cm, node)
+	if err != nil {
+		t.Fatalf("BuildPush reset: %v", err)
+	}
+	_ = ssID
+	for _, ib := range p.Inbounds {
+		if ib.Name == "v1" && ib.Port != 443 {
+			t.Fatalf("BuildPush v1 reset: got %d, want 443 (inbound's own port)", ib.Port)
+		}
 	}
 }

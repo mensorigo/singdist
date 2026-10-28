@@ -314,7 +314,7 @@ function NodeFormDialog({
         throw new Error("使用系数必须大于 0");
       }
       if (creating) {
-        await api.nodes.create({
+        const created = await api.nodes.create({
           name: name.trim(),
           address: address.trim(),
           token: token.trim(),
@@ -323,6 +323,9 @@ function NodeFormDialog({
           addToAllInbounds: addToAll,
         });
         toast.success("节点已添加（5 秒内开始首次推送和状态探测）");
+        if (created.warning) {
+          toast.warning(created.warning);
+        }
       } else {
         await api.nodes.update(item.id, {
           name: name.trim(),

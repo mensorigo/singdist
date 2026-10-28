@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 )
 
@@ -84,6 +85,24 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.agent.Status(r.Context()))
 }
 
+func (s *Server) handleCheckPort(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	port, err := strconv.Atoi(r.URL.Query().Get("port"))
+	if err != nil || port < 1 || port > 65535 {
+		http.Error(w, "invalid port", http.StatusBadRequest)
+		return
+	}
+	tr, label, ok := ParseCheckTransport(r.URL.Query().Get("transport"))
+	if !ok {
+		http.Error(w, "invalid transport (tcp|udp|both)", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.agent.CheckPort(port, tr, label))
+}
+
 func (s *Server) handleClearBlock(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -102,6 +121,7 @@ func (s *Server) Run(ctx context.Context) error {
 	mux.HandleFunc("/api/agent/sync", s.auth(s.handleSync))
 	mux.HandleFunc("/api/agent/status", s.auth(s.handleStatus))
 	mux.HandleFunc("/api/agent/clear-block", s.auth(s.handleClearBlock))
+	mux.HandleFunc("/api/agent/check-port", s.auth(s.handleCheckPort))
 	srv := &http.Server{
 		Addr:        s.addr,
 		Handler:     mux,

@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -127,8 +128,14 @@ const (
 	pushTimeout      = 120 * time.Second
 	statusTimeout    = 10 * time.Second
 	clearTimeout     = 10 * time.Second
+	checkPortTimeout = 10 * time.Second
 	maxResponseBytes = 4 << 20
 )
+
+// ErrCheckPortUnsupported means the agent answered 404 for the
+// check-port endpoint: it predates that endpoint and must be
+// upgraded before per-machine port checks can run against it.
+var ErrCheckPortUnsupported = errors.New("agent does not support check-port (upgrade the agent)")
 
 // Client talks to one agent's management API. v1 always skips TLS
 // verification (the token is the auth; TLS only encrypts). The tlsMode
@@ -239,6 +246,46 @@ func (c *Client) Status(ctx context.Context, address, token string) (*AgentStatu
 		return nil, fmt.Errorf("bad agent status response: %w", err)
 	}
 	return &st, nil
+}
+
+// AgentPortCheck mirrors the agent's check-port answer. Kind is ""
+// when free, else reserved | managed | listening; OccupiedBy is the
+// managed inbound's tag when Kind is managed.
+type AgentPortCheck struct {
+	Port       int    `json:"port"`
+	Transport  string `json:"transport"`
+	Occupied   bool   `json:"occupied"`
+	Reason     string `json:"reason"`
+	Kind       string `json:"kind"`
+	OccupiedBy string `json:"occupiedBy"`
+}
+
+// CheckPort asks the agent whether a port is free on its machine for
+// a transport (tcp | udp | both). A 404 maps to
+// ErrCheckPortUnsupported (the agent predates the endpoint).
+func (c *Client) CheckPort(ctx context.Context, address, token string, port int, transport string) (*AgentPortCheck, error) {
+	base, err := c.baseURL(address)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, checkPortTimeout)
+	defer cancel()
+	url := fmt.Sprintf("%s/api/agent/check-port?port=%d&transport=%s", base, port, transport)
+	status, data, err := c.do(ctx, http.MethodGet, url, token, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, ErrCheckPortUnsupported
+	}
+	if status != http.StatusOK {
+		return nil, errForStatus(status, data)
+	}
+	var chk AgentPortCheck
+	if err := json.Unmarshal(data, &chk); err != nil {
+		return nil, fmt.Errorf("bad agent check-port response: %w", err)
+	}
+	return &chk, nil
 }
 
 // ClearBlock asks the agent to clear its blocked input hash.

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"singbox-ui/server/internal/apix"
+	"singbox-ui/server/internal/store"
 
 	"github.com/gin-gonic/gin"
 )
@@ -28,6 +29,7 @@ func (h *Handler) RegisterProtected(rg *gin.RouterGroup) {
 	rg.GET("/nodes/:id/status", h.probeStatus)
 	rg.GET("/inbounds/:id/nodes", h.getInboundNodes)
 	rg.PATCH("/inbounds/:id/nodes", h.setInboundNodes)
+	rg.GET("/nodes/:id/check-port", h.checkNodePort)
 }
 
 func (h *Handler) list(c *gin.Context) {
@@ -136,17 +138,35 @@ func (h *Handler) probeStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": st, "node": v})
 }
 
+// inboundNodeAssignmentJSON is one assignment in API shape. Port 0
+// means "use the inbound's own port on that node".
+type inboundNodeAssignmentJSON struct {
+	NodeID int64 `json:"nodeId"`
+	Port   int   `json:"port"`
+}
+
+func toAssignmentJSON(nodes []store.InboundAssignment) ([]inboundNodeAssignmentJSON, []int64) {
+	out := []inboundNodeAssignmentJSON{}
+	ids := []int64{}
+	for _, n := range nodes {
+		out = append(out, inboundNodeAssignmentJSON{NodeID: n.NodeID, Port: n.Port})
+		ids = append(ids, n.NodeID)
+	}
+	return out, ids
+}
+
 func (h *Handler) getInboundNodes(c *gin.Context) {
 	id, ok := pathID(c)
 	if !ok {
 		return
 	}
-	ids, err := h.svc.GetInboundNodes(c.Request.Context(), id)
+	nodes, err := h.svc.GetInboundNodeAssignments(c.Request.Context(), id)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"nodeIds": ids})
+	assignments, ids := toAssignmentJSON(nodes)
+	c.JSON(http.StatusOK, gin.H{"nodeIds": ids, "nodes": assignments})
 }
 
 func (h *Handler) setInboundNodes(c *gin.Context) {
@@ -156,17 +176,52 @@ func (h *Handler) setInboundNodes(c *gin.Context) {
 	}
 	var req struct {
 		NodeIDs []int64 `json:"nodeIds"`
+		Nodes   []struct {
+			NodeID int64 `json:"nodeId"`
+			Port   int   `json:"port"`
+		} `json:"nodes"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with nodeIds")
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with nodeIds or nodes")
 		return
 	}
-	ids, err := h.svc.SetInboundNodes(c.Request.Context(), id, req.NodeIDs)
+	// New shape wins; the legacy nodeIds shape (old frontend) maps to
+	// port 0 = the inbound's own port.
+	assignments := []store.InboundAssignment{}
+	if len(req.Nodes) > 0 {
+		for _, n := range req.Nodes {
+			assignments = append(assignments, store.InboundAssignment{NodeID: n.NodeID, Port: n.Port})
+		}
+	} else {
+		for _, nid := range req.NodeIDs {
+			assignments = append(assignments, store.InboundAssignment{NodeID: nid, Port: 0})
+		}
+	}
+	saved, err := h.svc.SetInboundNodes(c.Request.Context(), id, assignments)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"nodeIds": ids})
+	out, ids := toAssignmentJSON(saved)
+	c.JSON(http.StatusOK, gin.H{"nodeIds": ids, "nodes": out})
+}
+
+func (h *Handler) checkNodePort(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	port, err := strconv.Atoi(c.Query("port"))
+	if err != nil || port < 1 || port > 65535 {
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "invalid port")
+		return
+	}
+	chk, err := h.svc.CheckNodePort(c.Request.Context(), id, port, c.Query("transport"))
+	if err != nil {
+		failErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, chk)
 }
 
 func pathID(c *gin.Context) (int64, bool) {

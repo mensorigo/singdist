@@ -111,7 +111,10 @@ func (s *Service) Generate(ctx context.Context) (doc []byte, hash string, err er
 	var certPEM, keyPEM []byte
 	needCert := false
 	for _, ib := range inbounds {
-		if ib.Enabled && (ib.Protocol == "hysteria2" || ib.Protocol == "tuic" || ib.Protocol == "anytls" || ib.Protocol == "trojan") {
+		// Nodes-only inbounds need no local cert: their cert is
+		// fetched by the node push, and a missing local cert must
+		// not fail the local sync.
+		if ib.Enabled && ib.RunLocal && (ib.Protocol == "hysteria2" || ib.Protocol == "tuic" || ib.Protocol == "anytls" || ib.Protocol == "trojan") {
 			needCert = true
 		}
 	}
@@ -124,7 +127,9 @@ func (s *Service) Generate(ctx context.Context) (doc []byte, hash string, err er
 
 	genInbounds := []any{}
 	for _, ib := range inbounds {
-		if !ib.Enabled {
+		// Nodes-only inbounds are not generated locally: the local
+		// core never listens on them.
+		if !ib.Enabled || !ib.RunLocal {
 			continue
 		}
 		gen, err := s.genInbound(ib, subsFor(ib.ID), cfg.PublicHost, certPEM, keyPEM)

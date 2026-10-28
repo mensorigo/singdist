@@ -165,6 +165,7 @@ export interface NodeView {
   lastOnlineAt: number;
   lastInboundCount: number;
   lastVersion: string;
+  warning?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -344,12 +345,21 @@ export const api = {
         `/api/nodes/${id}/status`,
       ),
     getInboundNodes: (inboundId: number) =>
-      request<{ nodeIds: number[] }>(`/api/inbounds/${inboundId}/nodes`),
-    setInboundNodes: (inboundId: number, nodeIds: number[]) =>
-      request<{ nodeIds: number[] }>(`/api/inbounds/${inboundId}/nodes`, {
-        method: "PATCH",
-        body: JSON.stringify({ nodeIds }),
-      }),
+      request<{ nodeIds: number[]; nodes: InboundNodeAssignment[] }>(
+        `/api/inbounds/${inboundId}/nodes`,
+      ),
+    setInboundNodes: (inboundId: number, nodes: InboundNodeAssignment[]) =>
+      request<{ nodeIds: number[]; nodes: InboundNodeAssignment[] }>(
+        `/api/inbounds/${inboundId}/nodes`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ nodes }),
+        },
+      ),
+    checkPort: (nodeId: number, port: number, transport: string) =>
+      request<AgentPortCheck>(
+        `/api/nodes/${nodeId}/check-port?port=${port}&transport=${encodeURIComponent(transport)}`,
+      ),
   },
   templates: {
     list: () => request<TemplateView[]>("/api/templates"),
@@ -617,7 +627,8 @@ export type InboundStatus =
   | "drifted"
   | "pending"
   | "unknown"
-  | "disabled";
+  | "disabled"
+  | "remote";
 
 export interface InboundDiff {
   field:
@@ -640,6 +651,7 @@ export interface InboundView {
   port: number;
   params: InboundParams;
   enabled: boolean;
+  runLocal: boolean;
   status: InboundStatus;
   diffs?: InboundDiff[];
   createdAt: number;
@@ -668,12 +680,29 @@ export interface InboundCreate {
   protocol: string;
   port: number;
   params: InboundParams;
+  runLocal?: boolean;
 }
 
 export interface InboundUpdate {
   name: string;
   port: number;
   params: InboundParams;
+  runLocal?: boolean;
+}
+
+// One inbound -> node assignment. Port 0 = the inbound's own port.
+export interface InboundNodeAssignment {
+  nodeId: number;
+  port: number;
+}
+
+export interface AgentPortCheck {
+  port: number;
+  transport: string;
+  occupied: boolean;
+  reason: string;
+  kind: string;
+  occupiedBy: string;
 }
 
 export interface RealityKeypair {

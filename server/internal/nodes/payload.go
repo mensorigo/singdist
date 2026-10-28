@@ -59,13 +59,16 @@ func BuildPush(ctx context.Context, st *store.Store, certMgr *certs.Manager, nod
 	if err != nil {
 		return PushPayload{}, "", err
 	}
-	assigned, err := st.NodeInboundIDs(ctx, node.ID)
+	assigned, err := st.NodeInboundAssignments(ctx, node.ID)
 	if err != nil {
 		return PushPayload{}, "", err
 	}
+	// inbound id -> per-node port override (0 = the inbound's own port).
 	assignedSet := map[int64]bool{}
-	for _, id := range assigned {
-		assignedSet[id] = true
+	assignedPort := map[int64]int{}
+	for _, a := range assigned {
+		assignedSet[a.InboundID] = true
+		assignedPort[a.InboundID] = a.Port
 	}
 
 	tplInbounds := map[int64]map[int64]bool{}
@@ -114,10 +117,14 @@ func BuildPush(ctx context.Context, st *store.Store, certMgr *certs.Manager, nod
 		if isTLSProtocol(ib.Protocol) {
 			needCert = true
 		}
+		port := ib.Port
+		if p, ok := assignedPort[ib.ID]; ok && p > 0 {
+			port = p
+		}
 		pushed = append(pushed, PushInbound{
 			Name:     ib.Name,
 			Protocol: ib.Protocol,
-			Port:     ib.Port,
+			Port:     port,
 			Enabled:  true,
 			Params:   json.RawMessage(ib.Params),
 			Users:    users,

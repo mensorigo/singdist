@@ -30,6 +30,7 @@ import {
   type Hy2Params,
   type InboundDiff,
   type InboundList,
+  type InboundNodeAssignment,
   type InboundParams,
   type InboundProtocol,
   type InboundStatus,
@@ -70,6 +71,7 @@ function StatusBadge({
     pending: ["未同步", "bg-muted text-muted-foreground"],
     unknown: ["无法对照", "bg-muted text-muted-foreground"],
     disabled: ["已停用", "bg-muted text-muted-foreground"],
+    remote: ["仅节点", "bg-muted text-muted-foreground"],
   } as const;
   const [label, cls] = map[status];
   return (
@@ -547,10 +549,21 @@ function InboundFormDialog({
   const [formError, setFormError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Remote node assignment: local is always included, no checkbox needed.
+  // Local run switch + remote node assignment. Local is no longer
+  // implicit: runLocal off means the local machine skips this inbound.
+  const [runLocal, setRunLocal] = useState(
+    creating ? true : (item?.runLocal ?? true),
+  );
   const [nodes, setNodes] = useState<NodeView[]>([]);
   const [selectedNodes, setSelectedNodes] = useState<Set<number>>(new Set());
   const [initialNodes, setInitialNodes] = useState<Set<number>>(new Set());
+  // Per-node port override input text: "" = use the inbound's port.
+  const [nodePorts, setNodePorts] = useState<Map<number, string>>(new Map());
+  const [initialNodePorts, setInitialNodePorts] = useState<Map<number, number>>(
+    new Map(),
+  );
+  // Live occupancy hints per node (from the check-port proxy).
+  const [portHints, setPortHints] = useState<Map<number, string>>(new Map());
 
   useEffect(() => {
     let cancelled = false;
@@ -560,11 +573,19 @@ function InboundFormDialog({
         if (cancelled) return;
         setNodes(list);
         if (!creating && item) {
-          const { nodeIds } = await api.nodes.getInboundNodes(item.id);
+          const res = await api.nodes.getInboundNodes(item.id);
           if (cancelled) return;
-          const s = new Set(nodeIds);
+          const s = new Set(res.nodeIds);
+          const ports = new Map<number, string>();
+          const initPorts = new Map<number, number>();
+          for (const a of res.nodes ?? []) {
+            initPorts.set(a.nodeId, a.port);
+            if (a.port > 0) ports.set(a.nodeId, String(a.port));
+          }
           setSelectedNodes(s);
           setInitialNodes(s);
+          setNodePorts(ports);
+          setInitialNodePorts(initPorts);
         }
       } catch {
         if (!cancelled) setNodes([]);
@@ -574,6 +595,52 @@ function InboundFormDialog({
       cancelled = true;
     };
   }, [creating, item]);
+
+  // Live per-node occupancy hints, debounced. The effective port is
+  // the override, or the inbound's port when the input is empty.
+  useEffect(() => {
+    if (nodes.length === 0 || selectedNodes.size === 0) {
+      setPortHints(new Map());
+      return;
+    }
+    const transport =
+      protocol === "hysteria2" || protocol === "tuic"
+        ? "udp"
+        : protocol === "shadowsocks"
+          ? "both"
+          : "tcp";
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      (async () => {
+        const next = new Map<number, string>();
+        for (const id of selectedNodes) {
+          const raw = (nodePorts.get(id) ?? "").trim();
+          const effective = raw === "" ? port : Number(raw);
+          if (
+            !Number.isInteger(effective) ||
+            effective < 1 ||
+            effective > 65535
+          ) {
+            next.set(id, "端口无效");
+            continue;
+          }
+          try {
+            const chk = await api.nodes.checkPort(id, effective, transport);
+            if (cancelled) return;
+            next.set(id, chk.occupied ? `已被占用：${chk.reason}` : "可用");
+          } catch {
+            if (cancelled) return;
+            next.set(id, "无法查询（保存时会再拦）");
+          }
+        }
+        if (!cancelled) setPortHints(next);
+      })();
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [nodes, selectedNodes, nodePorts, port, protocol]);
 
   const copyPublicKey = async () => {
     try {
@@ -649,6 +716,28 @@ function InboundFormDialog({
     setSubmitting(true);
     try {
       const params = buildParams();
+      if (!runLocal && selectedNodes.size === 0) {
+        setFormError(
+          "主服务器关了，又没选节点，这个入站哪都不跑：请至少选一个节点，或打开主服务器开关。",
+        );
+        return;
+      }
+      // Per-node ports: empty = the inbound's port (0); anything else
+      // must be a valid port, or the save stops here.
+      const assignments: InboundNodeAssignment[] = [];
+      for (const id of selectedNodes) {
+        const raw = (nodePorts.get(id) ?? "").trim();
+        if (raw === "") {
+          assignments.push({ nodeId: id, port: 0 });
+          continue;
+        }
+        const p = Number(raw);
+        if (!Number.isInteger(p) || p < 1 || p > 65535) {
+          setFormError("节点端口无效（1-65535，留空则用入站端口）");
+          return;
+        }
+        assignments.push({ nodeId: id, port: p });
+      }
       let inboundId: number;
       if (creating) {
         const created = await api.inbounds.create({
@@ -656,21 +745,32 @@ function InboundFormDialog({
           protocol,
           port,
           params,
+          runLocal,
         });
         inboundId = created.id;
         toast.success("入站已创建");
       } else {
-        await api.inbounds.update(item.id, { name: name.trim(), port, params });
+        await api.inbounds.update(item.id, {
+          name: name.trim(),
+          port,
+          params,
+          runLocal,
+        });
         inboundId = item.id;
         toast.success("入站已保存");
       }
       const changed =
         selectedNodes.size !== initialNodes.size ||
-        [...selectedNodes].some((id) => !initialNodes.has(id));
+        [...selectedNodes].some((id) => !initialNodes.has(id)) ||
+        [...selectedNodes].some(
+          (id) =>
+            (initialNodePorts.get(id) ?? 0) !==
+            (assignments.find((a) => a.nodeId === id)?.port ?? 0),
+        );
       // Edit: save only when the assignment changed (empty = unassign all).
       // Create: save only when at least one node is picked (default = local only).
       if ((!creating && changed) || (creating && selectedNodes.size > 0)) {
-        await api.nodes.setInboundNodes(inboundId, [...selectedNodes]);
+        await api.nodes.setInboundNodes(inboundId, assignments);
       }
       await onSaved();
     } catch (err) {
@@ -746,6 +846,20 @@ function InboundFormDialog({
                 required
               />
             </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={runLocal}
+                onChange={(e) => setRunLocal(e.target.checked)}
+              />
+              主服务器也跑这个入站
+            </label>
+            <p className="text-xs text-muted-foreground">
+              关掉后，主服务器不跑这个入站，只跑在下面勾选的节点上。
+            </p>
           </div>
 
           {protocol === "vless-reality" && (
@@ -1146,33 +1260,65 @@ function InboundFormDialog({
             <Label>远程节点</Label>
             {nodes.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                还没有节点，先去「节点」页添加。本地始终包含，不用选。
+                还没有节点，先去「节点」页添加。主服务器那条由上面的开关控制。
               </p>
             ) : (
               <div className="space-y-1">
-                {nodes.map((n) => (
-                  <label
-                    key={n.id}
-                    className="flex items-center gap-2 text-sm"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedNodes.has(n.id)}
-                      onChange={(e) => {
-                        const next = new Set(selectedNodes);
-                        if (e.target.checked) {
-                          next.add(n.id);
-                        } else {
-                          next.delete(n.id);
-                        }
-                        setSelectedNodes(next);
-                      }}
-                    />
-                    {n.name}（{n.address}）
-                  </label>
-                ))}
+                {nodes.map((n) => {
+                  const checked = selectedNodes.has(n.id);
+                  const hint = portHints.get(n.id);
+                  return (
+                    <div key={n.id} className="space-y-1">
+                      <div className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) => {
+                            const next = new Set(selectedNodes);
+                            if (e.target.checked) {
+                              next.add(n.id);
+                            } else {
+                              next.delete(n.id);
+                            }
+                            setSelectedNodes(next);
+                          }}
+                        />
+                        <span className="min-w-0 flex-1 truncate">
+                          {n.name}（{n.address}）
+                        </span>
+                        <Input
+                          type="number"
+                          min={1}
+                          max={65535}
+                          value={nodePorts.get(n.id) ?? ""}
+                          onChange={(e) => {
+                            const next = new Map(nodePorts);
+                            next.set(n.id, e.target.value);
+                            setNodePorts(next);
+                          }}
+                          placeholder={`同入站端口 ${port}`}
+                          disabled={!checked}
+                          className="h-7 w-32"
+                        />
+                      </div>
+                      {checked && hint && (
+                        <p
+                          className={cn(
+                            "pl-6 text-xs",
+                            hint.startsWith("已被占用")
+                              ? "text-destructive"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {hint}
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
                 <p className="text-xs text-muted-foreground">
-                  本地始终包含。勾选的节点会收到这个入站的推送，订阅里也会出现该节点的入口。
+                  勾选的节点会收到这个入站的推送，订阅里也会出现该节点的入口。端口留空
+                  = 用入站端口。
                 </p>
               </div>
             )}

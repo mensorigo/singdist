@@ -92,7 +92,8 @@ type View struct {
 	Port      int             `json:"port"`
 	Params    json.RawMessage `json:"params"`
 	Enabled   bool            `json:"enabled"`
-	Status    string          `json:"status"` // synced | drifted | pending | unknown | disabled
+	RunLocal  bool            `json:"runLocal"` // false = local machine skips this inbound
+	Status    string          `json:"status"` // synced | drifted | pending | unknown | disabled | remote (nodes-only)
 	Diffs     []Diff          `json:"diffs,omitempty"`
 	CreatedAt int64           `json:"createdAt"`
 	UpdatedAt int64           `json:"updatedAt"`
@@ -275,8 +276,14 @@ func normalizeParams(protocol string, raw json.RawMessage, creating bool) (strin
 // checkPortConflict enforces per-transport port uniqueness across
 // protocols: inbounds sharing a transport (TCP/UDP) may not share a
 // port. Same-protocol collisions are also caught here (and backstopped
-// by the (protocol, port) unique index).
-func (s *Service) checkPortConflict(ctx context.Context, selfID int64, protocol string, port int) error {
+// by the (protocol, port) unique index, which is partial on
+// run_local). Only inbounds that actually run locally participate:
+// a nodes-only inbound neither needs a free local port nor blocks
+// one, and a run_local flip frees (or claims) its port accordingly.
+func (s *Service) checkPortConflict(ctx context.Context, selfID int64, protocol string, port int, runLocal bool) error {
+	if !runLocal {
+		return nil
+	}
 	spec, ok := protocolSpecs[protocol]
 	if !ok {
 		return errValidation("unsupported protocol")
@@ -286,7 +293,7 @@ func (s *Service) checkPortConflict(ctx context.Context, selfID int64, protocol 
 		return err
 	}
 	for _, r := range rows {
-		if r.ID == selfID || r.Port != port {
+		if r.ID == selfID || r.Port != port || !r.RunLocal {
 			continue
 		}
 		other, ok := protocolSpecs[r.Protocol]
@@ -323,6 +330,8 @@ type CreateRequest struct {
 	Protocol string          `json:"protocol"`
 	Port     int             `json:"port"`
 	Params   json.RawMessage `json:"params"`
+	// RunLocal nil = default true (historical behavior: local runs it).
+	RunLocal *bool `json:"runLocal"`
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (View, error) {
@@ -334,10 +343,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	if err := s.checkPortConflict(ctx, 0, req.Protocol, req.Port); err != nil {
+	runLocal := true
+	if req.RunLocal != nil {
+		runLocal = *req.RunLocal
+	}
+	if err := s.checkPortConflict(ctx, 0, req.Protocol, req.Port, runLocal); err != nil {
 		return View{}, err
 	}
-	id, err := s.st.CreateInbound(ctx, name, req.Protocol, req.Port, params, nowUnix())
+	id, err := s.st.CreateInbound(ctx, name, req.Protocol, req.Port, params, runLocal, nowUnix())
 	if err != nil {
 		return View{}, conflictErr(err)
 	}
@@ -348,6 +361,8 @@ type UpdateRequest struct {
 	Name   string          `json:"name"`
 	Port   int             `json:"port"`
 	Params json.RawMessage `json:"params"`
+	// RunLocal nil = keep the current value.
+	RunLocal *bool `json:"runLocal"`
 }
 
 func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (View, string, error) {
@@ -373,7 +388,11 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (View
 	if err != nil {
 		return View{}, "", err
 	}
-	if err := s.checkPortConflict(ctx, id, cur.Protocol, req.Port); err != nil {
+	runLocal := cur.RunLocal
+	if req.RunLocal != nil {
+		runLocal = *req.RunLocal
+	}
+	if err := s.checkPortConflict(ctx, id, cur.Protocol, req.Port, runLocal); err != nil {
 		return View{}, "", err
 	}
 	// Summary covers safe fields only: params carry secrets (passwords,
@@ -385,7 +404,16 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (View
 	if cur.Port != req.Port {
 		parts = append(parts, "端口 "+strconv.Itoa(cur.Port)+"→"+strconv.Itoa(req.Port))
 	}
-	if err := s.st.UpdateInbound(ctx, id, name, req.Port, params, nowUnix()); err != nil {
+	if cur.RunLocal != runLocal {
+		onOff := func(b bool) string {
+			if b {
+				return "开"
+			}
+			return "关"
+		}
+		parts = append(parts, "主服务器运行 "+onOff(cur.RunLocal)+"→"+onOff(runLocal))
+	}
+	if err := s.st.UpdateInbound(ctx, id, name, req.Port, params, runLocal, nowUnix()); err != nil {
 		return View{}, "", conflictErr(err)
 	}
 	v, err := s.viewByID(ctx, id)

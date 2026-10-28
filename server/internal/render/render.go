@@ -150,12 +150,13 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 		nodes = append(nodes, n)
 	}
 	// Local nodes first (historical order and naming, unchanged).
+	// A nodes-only inbound (run_local off) has no local endpoint.
 	for _, id := range ids {
 		ib, ok := byID[id]
-		if !ok || !ib.Enabled {
+		if !ok || !ib.Enabled || !ib.RunLocal {
 			continue
 		}
-		n, ok := nodeForInbound(ib, sub, host)
+		n, ok := nodeForInbound(ib, sub, host, ib.Port)
 		if !ok {
 			continue
 		}
@@ -180,12 +181,14 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 		if err != nil {
 			return nil, err
 		}
-		byNode := map[int64]map[int64]bool{}
+		// node id -> inbound id -> per-node port override (0 = the
+		// inbound's own port).
+		byNode := map[int64]map[int64]int{}
 		for _, a := range assignments {
 			if byNode[a.NodeID] == nil {
-				byNode[a.NodeID] = map[int64]bool{}
+				byNode[a.NodeID] = map[int64]int{}
 			}
-			byNode[a.NodeID][a.InboundID] = true
+			byNode[a.NodeID][a.InboundID] = a.Port
 		}
 		now := time.Now().Unix()
 		for _, rn := range remoteNodes {
@@ -198,14 +201,18 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 			}
 			remoteHost := remoteHost(rn)
 			for _, id := range ids {
-				if !assigned[id] {
+				port, ok := assigned[id]
+				if !ok {
 					continue
 				}
 				ib, ok := byID[id]
 				if !ok || !ib.Enabled {
 					continue
 				}
-				n, ok := nodeForInbound(ib, sub, remoteHost)
+				if port <= 0 {
+					port = ib.Port
+				}
+				n, ok := nodeForInbound(ib, sub, remoteHost, port)
 				if !ok {
 					continue
 				}
@@ -221,8 +228,8 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 // local nodes, the node's public host for remote nodes. hysteria2 takes
 // its SNI from that host (it has no SNI param); the other protocols
 // take SNI from their params, identical on every node.
-func nodeForInbound(ib store.InboundRow, sub store.SubscriptionRow, host string) (Node, bool) {
-	n := Node{Protocol: ib.Protocol, Server: host, Port: ib.Port}
+func nodeForInbound(ib store.InboundRow, sub store.SubscriptionRow, host string, port int) (Node, bool) {
+	n := Node{Protocol: ib.Protocol, Server: host, Port: port}
 	switch ib.Protocol {
 	case "vless-reality":
 		var p realityParams
