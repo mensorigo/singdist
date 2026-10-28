@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
-import SyncControl from "@/components/sync-control";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Theme } from "@/lib/theme";
@@ -70,8 +69,6 @@ interface Props {
   onToggleTheme: () => void;
   onLogout: () => void;
   onRefresh: () => void;
-  syncRefreshSignal: number;
-  onSynced: () => void;
   textSelectable: boolean;
   children: ReactNode;
 }
@@ -84,8 +81,6 @@ export default function AppLayout({
   onToggleTheme,
   onLogout,
   onRefresh,
-  syncRefreshSignal,
-  onSynced,
   textSelectable,
   children,
 }: Props) {
@@ -269,17 +264,6 @@ export default function AppLayout({
             </span>
 
             <div className="ml-auto flex items-center gap-1.5">
-              {/* Temporarily hidden 2026-10-25: the top-bar sync control
-                  is hidden; auto-sync is configured on the Settings
-                  page. The component stays mounted so its 30s status
-                  poll still refreshes pages when auto-sync imports
-                  file changes; remove this wrapper to restore it. */}
-              <div className="hidden">
-                <SyncControl
-                  refreshSignal={syncRefreshSignal}
-                  onSynced={onSynced}
-                />
-              </div>
               <Button
                 variant="ghost"
                 size="icon"

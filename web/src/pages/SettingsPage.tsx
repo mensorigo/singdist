@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownUp, Globe, Share2, Shield, Type } from "lucide-react";
+import { Globe, Share2, Shield, Type } from "lucide-react";
 import { toast } from "sonner";
 
 import { EnabledSwitch } from "@/components/enabled-switch";
@@ -16,7 +16,6 @@ import {
   ApiError,
   type SettingsUpdate,
   type SettingsView,
-  type SyncStatus,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -134,11 +133,6 @@ function Row({
   );
 }
 
-function fmtSyncTime(unix: number): string {
-  if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleString("zh-CN", { hour12: false });
-}
-
 export default function SettingsPage({
   refreshSignal,
 }: {
@@ -154,8 +148,6 @@ export default function SettingsPage({
   const [publicHostDraft, setPublicHostDraft] = useState("");
   const [intervalDraft, setIntervalDraft] = useState("24");
   const [dashDraft, setDashDraft] = useState("3");
-  const [syncIntervalDraft, setSyncIntervalDraft] = useState("600");
-  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -181,29 +173,8 @@ export default function SettingsPage({
       setPublicHostDraft(settings.publicHost);
       setIntervalDraft(String(settings.updateIntervalHours));
       setDashDraft(String(settings.dashIntervalSecs));
-      setSyncIntervalDraft(String(settings.autoSyncIntervalSecs));
     }
   }, [settings]);
-
-  // Sync status for the 同步 card: the same 30s poll the top-bar
-  // control used, so the card's "last sync" line tracks auto-sync ticks.
-  useEffect(() => {
-    let cancelled = false;
-    const loadSyncStatus = async () => {
-      try {
-        const s = await api.sync.status();
-        if (!cancelled) setSyncStatus(s);
-      } catch {
-        /* status line keeps its previous value */
-      }
-    };
-    void loadSyncStatus();
-    const timer = setInterval(loadSyncStatus, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [refreshSignal]);
 
   // Instant save: apply optimistically, persist, revert on failure.
   const apply = (patch: SettingsUpdate) => {
@@ -256,18 +227,6 @@ export default function SettingsPage({
     }
     if (n !== settings.dashIntervalSecs) {
       apply({ dashIntervalSecs: n });
-    }
-  };
-
-  const commitSyncInterval = () => {
-    const n = Number(syncIntervalDraft);
-    if (!Number.isInteger(n) || n < 0 || n > 3600) {
-      toast.error("同步间隔需为 0–3600 的整数（秒）");
-      setSyncIntervalDraft(String(settings.autoSyncIntervalSecs));
-      return;
-    }
-    if (n !== settings.autoSyncIntervalSecs) {
-      apply({ autoSyncIntervalSecs: n });
     }
   };
 
@@ -475,48 +434,6 @@ export default function SettingsPage({
         </div>
       </SettingCard>
       </div>
-
-      <SettingCard
-        icon={<ArrowDownUp className="h-[18px] w-[18px]" />}
-        title="同步"
-        desc="核心配置的自动同步；顶栏同步按钮已隐藏，同步全部由这里控制。"
-      >
-        <>
-          <div className="divide-y">
-            <Row label="自动同步核心" hint="关闭后不再自动同步">
-              <EnabledSwitch
-                enabled={settings.autoSyncEnabled}
-                disabled={saving}
-                onToggle={() =>
-                  apply({ autoSyncEnabled: !settings.autoSyncEnabled })
-                }
-              />
-            </Row>
-            <Row label="同步间隔" hint="已由防抖 5 秒/30 秒接管，此项不再生效">
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min={0}
-                  max={3600}
-                  value={syncIntervalDraft}
-                  disabled={saving || !settings.autoSyncEnabled}
-                  onChange={(e) => setSyncIntervalDraft(e.target.value)}
-                  onBlur={commitSyncInterval}
-                  className="w-24"
-                />
-                <span className="text-sm text-muted-foreground">秒</span>
-              </div>
-            </Row>
-          </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            {syncStatus === null
-              ? "同步状态加载中…"
-              : syncStatus.inSync
-                ? `已同步${syncStatus.last ? ` · 上次同步 ${fmtSyncTime(syncStatus.last.at)}` : " · 尚未同步过"}`
-                : `有变更待同步${syncStatus.last ? ` · 上次同步 ${fmtSyncTime(syncStatus.last.at)}` : " · 尚未同步过"}`}
-          </p>
-        </>
-      </SettingCard>
 
       <p className="text-xs text-muted-foreground">
         这些选项保存后即时生效。
