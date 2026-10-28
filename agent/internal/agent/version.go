@@ -4,4 +4,4 @@ package agent
 // the central panel can show it on the node page and warn on mismatch.
 // Bump it on releases; it is intentionally a plain constant (no VCS
 // stamping: the agent builds with -trimpath from a working tree).
-const Version = "0.1.0"
+const Version = "0.1.1"

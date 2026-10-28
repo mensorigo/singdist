@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 )
 
 // generate builds the full sing-box config from the agent's desired
@@ -30,10 +31,16 @@ func generate(desired []Inbound, publicHost string, cert *Cert, logPath, clashAd
 	if logPath != "" {
 		logBlock["output"] = logPath
 	}
+	// external_controller is host:port, not a URL. Strip the scheme
+	// exactly like the panel does (coresync.go); a raw http:// value
+	// makes the core fail to start with "too many colons in address".
+	// (The Clash liveness probe keeps the full URL; only this field
+	// is stripped.)
+	controller := strings.TrimPrefix(strings.TrimPrefix(clashAddr, "http://"), "https://")
 	root := map[string]any{
 		"log": logBlock,
 		"experimental": map[string]any{
-			"clash_api": map[string]any{"external_controller": clashAddr},
+			"clash_api": map[string]any{"external_controller": controller},
 		},
 		"inbounds": genInbounds,
 		"outbounds": []any{

@@ -5,6 +5,34 @@ import (
 	"testing"
 )
 
+func TestGenerateClashControllerStripsScheme(t *testing.T) {
+	// Regression: a raw http:// Clash address used to be copied verbatim
+	// into external_controller, and the core then failed to start with
+	// "too many colons in address" (test-VPS empty push, 2026-10-28).
+	for _, tc := range []struct {
+		in   string
+		want string
+	}{
+		{"http://127.0.0.1:9090", "127.0.0.1:9090"},
+		{"https://127.0.0.1:9090", "127.0.0.1:9090"},
+		{"127.0.0.1:9090", "127.0.0.1:9090"},
+	} {
+		doc, _, err := generate(nil, "", nil, "", tc.in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var root map[string]any
+		if err := json.Unmarshal(doc, &root); err != nil {
+			t.Fatal(err)
+		}
+		exp := root["experimental"].(map[string]any)
+		ctrl := exp["clash_api"].(map[string]any)["external_controller"]
+		if ctrl != tc.want {
+			t.Errorf("clashAddr %q: external_controller = %q, want %q", tc.in, ctrl, tc.want)
+		}
+	}
+}
+
 func TestGenerateVLESSRealityShape(t *testing.T) {
 	ib := Inbound{Name: "v1", Protocol: ProtocolVLESSReality, Port: 443, Enabled: true,
 		Params: mustJSON(t, testRealityParams(t)),
@@ -48,7 +76,9 @@ func TestGenerateVLESSRealityShape(t *testing.T) {
 	}
 	exp, _ := root["experimental"].(map[string]any)
 	clash, _ := exp["clash_api"].(map[string]any)
-	if clash["external_controller"] != "http://127.0.0.1:9090" {
+	// external_controller is host:port, never a URL (see
+	// TestGenerateClashControllerStripsScheme).
+	if clash["external_controller"] != "127.0.0.1:9090" {
 		t.Fatalf("bad clash api: %v", clash)
 	}
 }
