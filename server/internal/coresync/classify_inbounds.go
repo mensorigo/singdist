@@ -9,13 +9,14 @@ import (
 )
 
 // classifyInbounds diffs the inbounds arrays by tag (the panel
-// identity: tag == panel name). It handles, in order: the hy2
-// server_name group decision, per-tag new/matched/deleted logic, and
-// user identity inside matched inbounds. All import ops are returned
-// for the caller to execute and verify; passthrough entries are
-// returned for the merge.
-func classifyInbounds(oldDoc, fileDoc map[string]any, oldByTag, fileByTag map[string]map[string]any, panel panelState, res *classifyResult) {
-	hy2ServerNameDecision(fileByTag, oldByTag, panel, res)
+// identity: tag == panel name). Panel-wins: a tag owned by a panel
+// row is regenerated whole from the row — file edits to it revert,
+// never import. A tag the panel does not own is unmanaged: on first
+// import it is imported when its protocol is modelled (else
+// passthrough); afterwards it is preserved whole as passthrough
+// (never imported — the one-time import already happened).
+func classifyInbounds(oldDoc, fileDoc map[string]any, oldByTag, fileByTag map[string]map[string]any, panel panelState, firstImport bool, res *classifyResult) {
+	hy2ServerNameDecision(fileByTag, oldByTag, panel, firstImport, res)
 
 	for tag, fileIb := range fileByTag {
 		if panel.passTags[tag] {
@@ -32,7 +33,24 @@ func classifyInbounds(oldDoc, fileDoc map[string]any, oldByTag, fileByTag map[st
 		oldIb, inOld := oldByTag[tag]
 		row, inPanel := panel.byTag[tag]
 		if !inOld {
-			classifyNewInbound(tag, fileIb, row, panel, res)
+			if inPanel {
+				// Panel row created after the baseline shares the
+				// tag with a hand-added file copy: the panel row
+				// wins (same resolution as first import's row
+				// branch — agree converges, differ reverts).
+				// A disabled row generates nothing, so an
+				// agreeing copy's userAppend is ignored by merge
+				// and the file copy is still dropped.
+				classifyNewInbound(tag, fileIb, row, panel, res)
+			} else if firstImport {
+				classifyNewInbound(tag, fileIb, row, panel, res)
+			} else {
+				// Post-baseline new tag: unmanaged, preserved
+				// whole (never imported — the one-time import
+				// already happened at install).
+				res.passes.inbound(tag).whole = deepCopyJSON(fileIb)
+				res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + tag + "]", detail: "文件新增，透传保留（面板无此入站）"})
+			}
 			continue
 		}
 		if !inPanel {
@@ -48,10 +66,11 @@ func classifyInbounds(oldDoc, fileDoc map[string]any, oldByTag, fileByTag map[st
 		classifyMatchedInbound(tag, oldIb, fileIb, row, panel, res)
 	}
 
-	// Deletions: a tag the file no longer carries. Only a row that
-	// still exists in the panel is deleted; a tag that is neither in
-	// the file nor in the panel is already converged (panel delete
-	// or passthrough removal) and needs no action.
+	// Deletions: a tag the file no longer carries. A row that still
+	// exists in the panel is restored by regeneration (panel-wins);
+	// a tag that is neither in the file nor in the panel is already
+	// converged (panel delete or passthrough removal) and needs no
+	// action.
 	for tag, oldIb := range oldByTag {
 		if _, inFile := fileByTag[tag]; inFile {
 			continue
@@ -64,10 +83,7 @@ func classifyInbounds(oldDoc, fileDoc map[string]any, oldByTag, fileByTag map[st
 		if !inPanel {
 			continue
 		}
-		res.imports = append(res.imports, importOp{kind: "inboundDelete", inboundID: row.ID, changes: []change{{
-			action: changeDeleted, item: "inbounds[" + tag + "]",
-			detail: "文件删除，面板跟删：" + inboundSummary(row, oldIb),
-		}}})
+		res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]", detail: "文件删除，面板恢复：" + inboundSummary(row, oldIb)})
 	}
 }
 
@@ -108,12 +124,25 @@ func maskSecrets(v any) any {
 }
 
 // hy2ServerNameDecision resolves the hysteria2 tls.server_name, which
-// is a single panel setting shared by all hy2 inbounds. Only a
-// UNIFORM file value may become the setting; divergent values stay
-// per-inbound passthrough. An invalid setting value (scheme, path,
-// overlong) also falls back to per-inbound passthrough instead of
-// failing the whole sync.
-func hy2ServerNameDecision(fileByTag, oldByTag map[string]map[string]any, panel panelState, res *classifyResult) {
+// is a single panel setting shared by all hy2 inbounds.
+//
+// Panel-wins (post-baseline): a file server_name that differs from
+// the panel setting is REVERTED (regen writes the panel host for all
+// hy2 inbounds); no import, no per-inbound passthrough. A file
+// REMOVAL of server_name reverts the same way (regen restores it).
+//
+// First import (no baseline): if the panel setting already has a
+// value, it wins as above. If the setting is unset, a UNIFORM file
+// value imports into the setting (exactly one value exists); a
+// DIVERGENT set has no single panel value, so each inbound keeps its
+// own via fieldSet passthrough; an invalid uniform value stays
+// per-inbound via fieldSet (the setting's validator would reject it).
+//
+// Only enabled, panel-managed hy2 inbounds are collected here —
+// passTags (unmanaged) and disabled rows are resolved in the
+// whole-inbound branch. A server_name EQUAL to the panel host logs
+// nothing.
+func hy2ServerNameDecision(fileByTag, oldByTag map[string]map[string]any, panel panelState, firstImport bool, res *classifyResult) {
 	type hy2Entry struct {
 		tag  string
 		name string // server_name, "" when absent
@@ -128,6 +157,11 @@ func hy2ServerNameDecision(fileByTag, oldByTag map[string]map[string]any, panel 
 			if !ok || proto != "hysteria2" {
 				continue
 			}
+			// Only enabled panel-managed hy2 inbounds: disabled
+			// rows revert in their own branch.
+			if row, ok := panel.byTag[tag]; !ok || !row.Enabled {
+				continue
+			}
 			tls, _ := asMap(ib["tls"])
 			entries = append(entries, hy2Entry{tag: tag, name: asString(tls["server_name"])})
 		}
@@ -137,24 +171,40 @@ func hy2ServerNameDecision(fileByTag, oldByTag map[string]map[string]any, panel 
 	if len(entries) == 0 {
 		return
 	}
-	// Baseline uniform value: what the file had at last sync. The
-	// file imports only when it differs from the BASELINE — a
-	// panel-side setting edit must not read as a file change.
-	baseEntries := collect(oldByTag)
-	baseUniform := len(baseEntries) > 0
-	baseWant := ""
-	if baseUniform {
-		baseWant = baseEntries[0].name
-		for _, e := range baseEntries[1:] {
-			if e.name != baseWant {
-				baseUniform = false
-				break
+	// Baseline gate, same as port/params: a panel-side host edit
+	// alone (file == baseline) earns no row — the file just
+	// converges. On first import the baseline is empty, so any file
+	// value differing from the setting counts as a file value.
+	baseByTag := map[string]string{}
+	for _, e := range collect(oldByTag) {
+		baseByTag[e.tag] = e.name
+	}
+	revertEntries := func(entries []hy2Entry) {
+		for _, e := range entries {
+			if e.name == panel.publicHost {
+				continue
+			}
+			if e.name == baseByTag[e.tag] {
+				continue // file unchanged; panel-side edit converges silently
+			}
+			if e.name == "" {
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + e.tag + "].tls.server_name", oldVal: panel.publicHost, detail: "文件删除，面板值恢复"})
+			} else {
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + e.tag + "].tls.server_name", oldVal: panel.publicHost, newVal: e.name, detail: "文件改动，恢复面板值"})
 			}
 		}
 	}
-	baseByTag := map[string]string{}
-	for _, e := range baseEntries {
-		baseByTag[e.tag] = e.name
+	if !firstImport {
+		// Panel-wins: any file deviation reverts to the setting.
+		revertEntries(entries)
+		return
+	}
+	// First import.
+	if panel.publicHost != "" {
+		// Setting already exists: it wins; divergent file values
+		// revert to it (no fieldSet).
+		revertEntries(entries)
+		return
 	}
 	uniform := true
 	for _, e := range entries[1:] {
@@ -163,39 +213,31 @@ func hy2ServerNameDecision(fileByTag, oldByTag map[string]map[string]any, panel 
 			break
 		}
 	}
-	if uniform {
-		want := entries[0].name
-		if baseUniform && want == baseWant {
-			return // file unchanged; the panel setting stands
-		}
-		if want == panel.publicHost {
-			return // already converged
-		}
-		if validPublicHost(want) {
-			res.imports = append(res.imports, importOp{kind: "settingHost", host: want, changes: []change{{action: changeUpdated, item: "settings.publicHost", oldVal: panel.publicHost, newVal: want, detail: "文件改动，覆盖面板"}}})
-			return
-		}
-		// Invalid for the setting: keep each file value verbatim.
-		// Rows fire only where the value changed since baseline.
+	if !uniform {
+		// Divergent: no single panel value exists; each inbound
+		// keeps its own via fieldSet passthrough.
 		for _, e := range entries {
-			res.passes.inbound(e.tag).fieldSet["tls.server_name"] = e.name
-			if bv, ok := baseByTag[e.tag]; !ok || bv != e.name {
-				res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + e.tag + "].tls.server_name", newVal: e.name, detail: "设置值非法，透传保留"})
+			if e.name == "" {
+				continue
 			}
+			res.passes.inbound(e.tag).fieldSet["tls.server_name"] = e.name
+			res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + e.tag + "].tls.server_name", oldVal: panel.publicHost, newVal: e.name, detail: "各入站不一致，透传保留"})
 		}
 		return
 	}
-	// Divergent: preserve each file value where it differs from what
-	// generation would produce (the current setting). Rows fire
-	// only where the value changed since baseline.
-	for _, e := range entries {
-		if e.name != panel.publicHost {
-			res.passes.inbound(e.tag).fieldSet["tls.server_name"] = e.name
-			if bv, ok := baseByTag[e.tag]; !ok || bv != e.name {
-				res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + e.tag + "].tls.server_name", oldVal: panel.publicHost, newVal: e.name, detail: "各入站不一致，透传保留"})
-			}
-		}
+	want := entries[0].name
+	if want == "" || want == panel.publicHost {
+		return // no SNI signal, or already converged
 	}
+	if !validPublicHost(want) {
+		// Invalid for the setting: keep each file value verbatim.
+		for _, e := range entries {
+			res.passes.inbound(e.tag).fieldSet["tls.server_name"] = e.name
+		}
+		res.changes = append(res.changes, change{action: changePassthrough, item: "settings.publicHost", oldVal: panel.publicHost, newVal: want, detail: "设置值非法，透传保留"})
+		return
+	}
+	res.imports = append(res.imports, importOp{kind: "settingHost", host: want, changes: []change{{action: changeUpdated, item: "settings.publicHost", oldVal: panel.publicHost, newVal: want, detail: "文件改动，覆盖面板"}}})
 }
 
 // validPublicHost mirrors the settings validation for sub_public_host:
@@ -214,22 +256,6 @@ func validPublicHost(host string) bool {
 // panel does not already own: create it (same validation as the UI),
 // preserve it verbatim when its protocol is unmodelled, or drop it
 // when its shape cannot be represented.
-// inboundCopyDiffers reports whether a file inbound copy differs
-// from its baseline copy (port or mapped params). Used for the
-// disabled-row re-enable decision: an unchanged file copy must not
-// resurrect a row the panel just disabled.
-func inboundCopyDiffers(oldIb, fileIb map[string]any, proto string) bool {
-	if portOf(oldIb["listen_port"]) != portOf(fileIb["listen_port"]) {
-		return true
-	}
-	oldParams, _, _, oldErr := mappedParams(proto, oldIb)
-	fileParams, _, _, fileErr := mappedParams(proto, fileIb)
-	if oldErr != nil || fileErr != nil {
-		return true
-	}
-	return !paramsEqual(oldParams, fileParams)
-}
-
 // uniformPasswordOf returns the single password shared by all users
 // that carry one. present is false when no user carries a password
 // field at all; uniform is false when they disagree.
@@ -279,36 +305,6 @@ func uniformFlowOf(users []map[string]any) (flow string, uniform bool, present b
 	return *u, true, true
 }
 
-// userFieldMap builds a name -> field-value mapping for users that
-// carry the field (users without it count as absent, so gaining or
-// losing the field changes the map).
-func userFieldMap(users []map[string]any, field string) map[string]string {
-	m := map[string]string{}
-	for _, u := range users {
-		name := asString(u["name"])
-		if name == "" {
-			continue
-		}
-		if raw, ok := u[field]; ok {
-			m[name] = asString(raw)
-		}
-	}
-	return m
-}
-
-func sameUserFieldMap(a, b []map[string]any, field string) bool {
-	am, bm := userFieldMap(a, field), userFieldMap(b, field)
-	if len(am) != len(bm) {
-		return false
-	}
-	for k, v := range am {
-		if bv, ok := bm[k]; !ok || bv != v {
-			return false
-		}
-	}
-	return true
-}
-
 // uniformFilePassword returns the single password shared by all file
 // users that carry one. Users without a password field are skipped.
 // ok is false when no user carries a password or they disagree.
@@ -353,10 +349,18 @@ func classifyNewInbound(tag string, fileIb map[string]any, row *store.InboundRow
 		// Resolve the shared password before comparing, or a copy
 		// that agrees on sni AND password would still read as
 		// different (mappedParams alone carries no password for
-		// these protocols) and be wrongly reverted.
+		// these protocols) and be wrongly reverted. Same for the
+		// vless flow: mappedParams leaves flow to the users loop,
+		// so a copy that agrees on everything including a uniform
+		// flow would otherwise read as different.
 		if proto == "hysteria2" || proto == "trojan" || proto == "anytls" {
 			if pw, ok := uniformFilePassword(fileUsers); ok && pw != "" {
 				params["password"] = pw
+			}
+		}
+		if proto == "vless-reality" {
+			if flow, uniform, present := uniformFlowOf(fileUsers); uniform && present {
+				params["flow"] = flow
 			}
 		}
 		var panelParams map[string]any
@@ -431,8 +435,14 @@ func marshalMap(m map[string]any) string {
 
 // classifyMatchedInbound handles a tag present in the baseline and
 // owned by an enabled panel row: port, params, and user identity.
-// A protocol change is never converted in place (the panel cannot
-// change a row's protocol): the whole inbound is reverted.
+// Panel-wins: the panel row is the truth. A file value that differs
+// from the panel value is REVERTED by regeneration (no import).
+// Extra hand-added fields inside the managed inbound are dropped on
+// regen (the whole inbound is panel-generated); unknown users are
+// the exception — whole user entries are preserved as passthrough
+// (see classifyUsers), not fields. A protocol change is never
+// converted in place (the panel cannot change a row's protocol):
+// the whole inbound is reverted.
 func classifyMatchedInbound(tag string, oldIb, fileIb map[string]any, row *store.InboundRow, panel panelState, res *classifyResult) {
 	proto, ok := panelProtocol(fileIb)
 	if !ok {
@@ -448,38 +458,30 @@ func classifyMatchedInbound(tag string, oldIb, fileIb map[string]any, row *store
 		return
 	}
 	if !row.Enabled {
-		// Disabled row re-added by the file: enabling is a panel
-		// operation, so the file may enable it — but ONLY when the
-		// file demonstrably (re-)added it (tag absent from the
-		// baseline, or the copy differs from the baseline copy).
-		// An unchanged file copy must NOT resurrect a row the panel
-		// just disabled; the disable wins and regen drops it.
-		if oldIb == nil || inboundCopyDiffers(oldIb, fileIb, proto) {
-			res.imports = append(res.imports, importOp{kind: "inboundEnable", inboundID: row.ID, enabled: true, changes: []change{{action: changeUpdated, item: "inbounds[" + tag + "].enabled", oldVal: "停用", newVal: "启用", detail: "文件改动，覆盖面板"}}})
+		// Disabled row: the file copy is reverted (regen drops it).
+		// An unchanged file copy converges silently via regen; only
+		// a changed copy earns a row.
+		if !jsonEqual(oldIb, fileIb) {
+			res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]", detail: "面板已停用该入站，文件改动不采纳"})
 		}
+		return
 	}
 
-	// Port, field-grouped (validated independently of params). The
-	// file's port imports only when it differs from the BASELINE
-	// port: comparing against the panel row would revert a
-	// panel-side port edit the file never touched.
-	if newPort := portOf(fileIb["listen_port"]); newPort != portOf(oldIb["listen_port"]) {
-		res.imports = append(res.imports, importOp{kind: "inboundPort", inboundID: row.ID, port: newPort, changes: []change{{action: changeUpdated, item: "inbounds[" + tag + "].listen_port", oldVal: fmt.Sprintf("%d", row.Port), newVal: fmt.Sprintf("%d", newPort), detail: "文件改动，覆盖面板"}}})
+	// Port: panel wins for the VALUE, but the ROW fires only when
+	// the file actually changed: file != baseline AND file !=
+	// panel. A panel-side port edit alone (file == baseline) must
+	// not read as a file deviation — the file just converges
+	// silently (S0).
+	if newPort := portOf(fileIb["listen_port"]); newPort != row.Port && newPort != portOf(oldIb["listen_port"]) {
+		res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].listen_port", oldVal: fmt.Sprintf("%d", row.Port), newVal: fmt.Sprintf("%d", newPort), detail: "文件改动，恢复面板值"})
 	}
 
-	// Params: mapped file fields overlaid on panel params; unmapped
-	// fields preserved verbatim; auto-fill absences omitted from the
-	// generated object instead of letting validation invent a value.
-	// The import decision is BASELINE-driven throughout: a mapped
-	// field imports only when the file's value differs from the
-	// baseline's, so a panel-side edit to another field (or the
-	// same field) is never mistaken for a file change. The merge
-	// entries (fieldSet/fieldDel) stay presence-driven — the merged
-	// config must carry the file's content even when unchanged —
-	// but their log rows fire only on baseline diffs.
+	// Params: mapped file fields against panel params (panel wins
+	// for the value). Same baseline gate as the port: a panel-side
+	// param edit alone earns no row.
 	fileParams, delFields, unmapped, err := mappedParams(proto, fileIb)
 	if err != nil {
-		res.changes = append(res.changes, change{action: changeDroppedIllegal, item: "inbounds[" + tag + "]", detail: "参数无法解析：" + err.Error()})
+		res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]", detail: "参数无法解析，恢复面板值：" + err.Error()})
 	} else {
 		var panelParams map[string]any
 		_ = json.Unmarshal([]byte(row.Params), &panelParams)
@@ -487,58 +489,44 @@ func classifyMatchedInbound(tag string, oldIb, fileIb map[string]any, row *store
 			panelParams = map[string]any{}
 		}
 		oldParams, _, _, oldErr := mappedParams(proto, oldIb)
-		if oldErr != nil {
-			// Baseline unparseable (should not happen for a
-			// previously written doc): fall back to panel
-			// comparison rather than dropping the file values.
-			oldParams = panelParams
-		}
-		merged := map[string]any{}
-		for k, v := range panelParams {
-			merged[k] = v
-		}
-		changedFields := []string{}
 		for k, v := range fileParams {
-			if ov, inOld := oldParams[k]; !inOld || !jsonEqual(ov, v) {
-				merged[k] = v
-				changedFields = append(changedFields, k)
+			if pv, ok := panelParams[k]; !ok || !jsonEqual(pv, v) {
+				// Baseline gate: skip when the file value equals
+				// the baseline value (panel-side edit, file just
+				// converges). An unparseable baseline cannot prove
+				// panel-side, so the row fires.
+				if oldErr == nil {
+					if ov, ok := oldParams[k]; ok && jsonEqual(ov, v) {
+						continue
+					}
+				}
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]." + k, oldVal: valStr(panelParams[k], secretField(k)), newVal: valStr(v, secretField(k)), detail: "文件改动，恢复面板值"})
 			}
 		}
-		if len(changedFields) > 0 {
-			var rows []change
-			for _, f := range changedFields {
-				rows = append(rows, change{action: changeUpdated, item: "inbounds[" + tag + "]." + f, oldVal: valStr(panelParams[f], secretField(f)), newVal: valStr(fileParams[f], secretField(f)), detail: "文件改动，覆盖面板"})
-			}
-			res.imports = append(res.imports, importOp{kind: "inboundParams", inboundID: row.ID, params: marshalMap(merged), changes: rows})
-		}
-		for path, v := range unmapped {
-			res.passes.inbound(tag).fieldSet[path] = deepCopyJSON(v)
-			if ov, present := getFieldPath(oldIb, path); !present || !jsonEqual(ov, v) {
-				res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + tag + "]." + path, newVal: valStr(v, secretField(leafField(path))), detail: "面板无此字段，透传保留"})
-			}
+		for path := range unmapped {
+			// Extra hand-added field inside a managed inbound:
+			// dropped on regen (whole inbound is panel-generated).
+			res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]." + path, detail: "面板生成整个入站，手加字段不保留"})
 		}
 		for _, path := range delFields {
-			// A del field reaches the merge only when the file
-			// REMOVED it since the baseline. An omission that
-			// predates the baseline is file silence, not a
-			// removal — the panel value stands.
 			if _, present := getFieldPath(oldIb, path); present {
-				res.passes.inbound(tag).fieldDel = append(res.passes.inbound(tag).fieldDel, path)
-				res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + tag + "]." + path, detail: "文件删除，透传移除（面板不自动补值）"})
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "]." + path, detail: "文件删除，面板值恢复"})
 			}
 		}
 	}
 
 	// Users: identity only (uuid, rename, unknown, absence). Password
-	// and flow uniformity live in the params step via helpers below.
+	// and flow uniformity live in the helpers below (panel-wins).
 	classifyUsers(tag, oldIb, fileIb, row, panel, res)
 }
 
 // classifyUsers resolves user entries inside one matched inbound.
-// Matching is by name first, then by uuid (vless/tuic) for renames.
-// Unknown users are preserved verbatim; absent users are noted, never
-// deleted (a subscription is panel-side state, and absence alone
-// cannot distinguish revoke from disable/expire/template change).
+// Panel-wins: a file change to a panel subscription's identity
+// (uuid, name) is REVERTED (regen writes the panel values), never
+// imported. Unknown users are preserved verbatim (never auto-created
+// — a bare user entry lacks template, limit, expiry and token, so a
+// subscription cannot be built from it safely); absent users are
+// noted, never deleted (regen restores them).
 func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundRow, panel panelState, res *classifyResult) {
 	fileUsers := userList(fileIb)
 	oldUsers := userList(oldIb)
@@ -560,16 +548,12 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 	}
 	hasUUID := row.Protocol == "vless-reality" || row.Protocol == "tuic"
 
-	// Password uniformity (password protocols): a uniform file
-	// password becomes the inbound password via the params update;
-	// divergent passwords stay per-user passthrough.
+	// Password uniformity (password protocols) and flow uniformity
+	// (vless): panel values win; divergent per-user overrides are
+	// dropped by regen (see the helpers).
 	if row.Protocol == "hysteria2" || row.Protocol == "tuic" || row.Protocol == "anytls" || row.Protocol == "trojan" {
 		passwordUniformity(tag, fileUsers, oldUsers, row, res)
 	}
-	// Flow uniformity (vless): a uniform file flow becomes the
-	// inbound flow via the params update; divergent flows stay
-	// per-user passthrough; uniformly absent flow omits flow from
-	// generated users instead of letting validation invent vision.
 	if row.Protocol == "vless-reality" {
 		flowUniformity(tag, fileUsers, oldUsers, row, res)
 	}
@@ -587,6 +571,18 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 			}
 		}
 		if bu == nil {
+			// Name collision with a panel sub: panel names are
+			// panel-owned identities, so a file user carrying one
+			// is never a stranger — even when the baseline never
+			// had it (e.g. the sub was created after the
+			// baseline). Panel wins: drop it (no append) and say
+			// reverted, not passthrough — otherwise merge's name
+			// dedupe would drop it silently while the log claims
+			// it was preserved.
+			if _, ok := panel.byName[name]; ok {
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "]", detail: "与面板订阅同名，恢复面板值（文件用户不保留）"})
+				continue
+			}
 			// Unknown user: preserved verbatim (never
 			// auto-created — a bare user entry lacks template,
 			// limit, expiry and token, so a subscription cannot
@@ -621,14 +617,16 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 		if jsonEqual(bu, fu) {
 			continue // file unchanged; panel state stands
 		}
-		// File changed this user: import its identity onto the sub.
+		// File changed this user: panel wins (revert, no import).
+		// Baseline gate, same as port/params: a panel-side identity
+		// edit alone (file == baseline) earns no row.
 		if hasUUID {
-			if fuuid := asString(fu["uuid"]); fuuid != "" && fuuid != sub.UUID {
-				res.imports = append(res.imports, importOp{kind: "subUUID", subID: sub.ID, uuid: fuuid, changes: []change{{action: changeUpdated, item: "inbounds[" + tag + "].users[" + name + "].uuid", detail: "文件改动，覆盖面板（值已隐藏）"}}})
+			if fuuid := asString(fu["uuid"]); fuuid != "" && fuuid != sub.UUID && fuuid != asString(bu["uuid"]) {
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "].uuid", detail: "文件改动，恢复面板值（值已隐藏）"})
 			}
 		}
-		if name != sub.Name {
-			res.imports = append(res.imports, importOp{kind: "subRename", subID: sub.ID, name: name, changes: []change{{action: changeUpdated, item: "inbounds[" + tag + "].users[" + name + "].name", oldVal: sub.Name, newVal: name, detail: "文件改动，覆盖面板（同 UUID 改名）"}}})
+		if name != sub.Name && name != asString(bu["name"]) {
+			res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "].name", oldVal: sub.Name, newVal: name, detail: "文件改动，恢复面板值"})
 		}
 	}
 	for name := range oldByName {
@@ -657,9 +655,12 @@ func userList(ib map[string]any) []map[string]any {
 	return out
 }
 
-// passwordUniformity folds file user passwords into the inbound
-// password when uniform, else preserves each divergent password on
-// its own user entry.
+// passwordUniformity resolves file user passwords against the panel
+// inbound password. Panel-wins: a uniform file password that differs
+// from the panel password is reverted (regen writes the panel
+// password for all users); divergent per-user passwords are dropped
+// by regen (the panel has one inbound password, not per-user ones).
+// No import, no per-user passthrough.
 func passwordUniformity(tag string, fileUsers, oldUsers []map[string]any, row *store.InboundRow, res *classifyResult) {
 	var panelPw string
 	var panelParams map[string]any
@@ -671,69 +672,28 @@ func passwordUniformity(tag string, fileUsers, oldUsers []map[string]any, row *s
 	if !filePresent {
 		return // no password signal in the file
 	}
-	basePw, baseUniform, _ := uniformPasswordOf(oldUsers)
 	if !fileUniform {
-		// Divergent: preserve each file password on its own user
-		// entry. Merge entries are presence-driven (generated users
-		// carry the panel password, so without the override the
-		// merged config would lose the file's passwords); the row
-		// fires only when the per-user mapping changed since the
-		// baseline.
-		for _, u := range fileUsers {
-			name := asString(u["name"])
-			pw, present := u["password"]
-			if !present || name == "" {
-				continue
-			}
-			if asString(pw) != panelPw {
-				if res.passes.inbound(tag).userSet[name] == nil {
-					res.passes.inbound(tag).userSet[name] = map[string]any{}
-				}
-				res.passes.inbound(tag).userSet[name]["password"] = deepCopyJSON(pw)
-			}
-		}
-		if !sameUserFieldMap(fileUsers, oldUsers, "password") {
-			res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + tag + "].users", detail: "各用户密码不一致，逐用户透传保留"})
-		}
+		res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users", detail: "各用户密码不一致，面板密码恢复（逐用户覆盖已丢弃）"})
 		return
 	}
-	// Uniform: import only when it differs from the BASELINE uniform
-	// value. A panel-side password edit must not read as a file
-	// change; an already-converged panel needs no op.
-	if baseUniform && filePw == basePw {
+	// Baseline gate: a panel-side password edit alone (file ==
+	// baseline uniform) earns no row — the file just converges.
+	if basePw, baseUniform, _ := uniformPasswordOf(oldUsers); baseUniform && filePw == basePw {
 		return
 	}
 	if filePw == panelPw {
 		return
 	}
-	// Fold into the params update: find the pending params op for
-	// this inbound, or create one from panel params.
-	for i := range res.imports {
-		if res.imports[i].kind == "inboundParams" && res.imports[i].inboundID == row.ID {
-			var m map[string]any
-			_ = json.Unmarshal([]byte(res.imports[i].params), &m)
-			if m == nil {
-				m = map[string]any{}
-			}
-			m["password"] = filePw
-			res.imports[i].params = marshalMap(m)
-			res.imports[i].changes = append(res.imports[i].changes, change{action: changeUpdated, item: "inbounds[" + tag + "].password", detail: "文件改动，覆盖面板（值已隐藏）"})
-			return
-		}
-	}
-	var m map[string]any
-	_ = json.Unmarshal([]byte(row.Params), &m)
-	if m == nil {
-		m = map[string]any{}
-	}
-	m["password"] = filePw
-	res.imports = append(res.imports, importOp{kind: "inboundParams", inboundID: row.ID, params: marshalMap(m), changes: []change{{action: changeUpdated, item: "inbounds[" + tag + "].password", detail: "文件改动，覆盖面板（值已隐藏）"}}})
+	res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].password", detail: "文件改动，恢复面板值（值已隐藏）"})
 }
 
-// flowUniformity folds a uniform file flow into the inbound flow
-// param; divergent or uniformly-absent flows stay per-user. All
-// decisions are BASELINE-driven: a panel-side flow edit must not
-// read as a file change, and an unchanged file pattern logs nothing.
+// flowUniformity resolves file user flows against the panel inbound
+// flow. Panel-wins: a uniform file flow that differs from the panel
+// flow is reverted; divergent per-user flows are dropped by regen.
+// A file REMOVAL of flow (baseline had it, panel still has it) is
+// reverted (regen restores it); pre-baseline file silence leaves the
+// panel flow standing without a row (it is a panel edit taking
+// effect, not a file revert).
 func flowUniformity(tag string, fileUsers, oldUsers []map[string]any, row *store.InboundRow, res *classifyResult) {
 	var panelFlow string
 	var panelParams map[string]any
@@ -744,83 +704,22 @@ func flowUniformity(tag string, fileUsers, oldUsers []map[string]any, row *store
 	fileFlow, fileUniform, filePresent := uniformFlowOf(fileUsers)
 	_, _, basePresent := uniformFlowOf(oldUsers)
 	if !filePresent {
-		// All file users lack flow: omit flow from generated users
-		// ONLY when the file REMOVED it since baseline (baseline had
-		// flow). File silence (baseline also lacked) leaves the panel
-		// flow standing. Never let validation invent vision for a
-		// deliberate removal.
-		if basePresent {
-			if panelFlow != "" {
-				for _, u := range fileUsers {
-					name := asString(u["name"])
-					if name == "" {
-						continue
-					}
-					res.passes.inbound(tag).userDel[name] = append(res.passes.inbound(tag).userDel[name], "flow")
-				}
-			}
-			res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + tag + "].users.flow", oldVal: panelFlow, detail: "文件删除 flow，透传移除（面板不自动补 vision）"})
+		if basePresent && panelFlow != "" {
+			res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users.flow", oldVal: panelFlow, detail: "文件删除 flow，面板值恢复"})
 		}
 		return
 	}
 	if !fileUniform {
-		// Divergent: per-user userSet/userDel (merge entries are
-		// presence-driven); the row fires only when the per-user
-		// mapping changed since baseline.
-		for _, u := range fileUsers {
-			name := asString(u["name"])
-			f, present := u["flow"]
-			if !present || name == "" {
-				continue
-			}
-			if asString(f) != panelFlow {
-				if res.passes.inbound(tag).userSet[name] == nil {
-					res.passes.inbound(tag).userSet[name] = map[string]any{}
-				}
-				res.passes.inbound(tag).userSet[name]["flow"] = deepCopyJSON(f)
-			}
-		}
-		// Users without flow in a divergent set: omit flow for them.
-		for _, u := range fileUsers {
-			name := asString(u["name"])
-			if _, present := u["flow"]; !present && name != "" && panelFlow != "" {
-				res.passes.inbound(tag).userDel[name] = append(res.passes.inbound(tag).userDel[name], "flow")
-			}
-		}
-		if !sameUserFieldMap(fileUsers, oldUsers, "flow") {
-			res.changes = append(res.changes, change{action: changePassthrough, item: "inbounds[" + tag + "].users.flow", detail: "各用户 flow 不一致，逐用户透传保留"})
-		}
+		res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users.flow", detail: "各用户 flow 不一致，面板 flow 恢复（逐用户覆盖已丢弃）"})
 		return
 	}
-	// Uniform present flow: import only when it differs from the
-	// baseline uniform value and from the panel flow.
-	baseFlow, baseUniform, _ := uniformFlowOf(oldUsers)
-	if baseUniform && fileFlow == baseFlow {
+	// Baseline gate: a panel-side flow edit alone (file == baseline
+	// uniform) earns no row — the file just converges.
+	if baseFlow, baseUniform, _ := uniformFlowOf(oldUsers); baseUniform && fileFlow == baseFlow {
 		return
 	}
 	if fileFlow == panelFlow {
 		return
 	}
-	// Fold into the params update: find the pending params op for
-	// this inbound, or create one from panel params.
-	for i := range res.imports {
-		if res.imports[i].kind == "inboundParams" && res.imports[i].inboundID == row.ID {
-			var m map[string]any
-			_ = json.Unmarshal([]byte(res.imports[i].params), &m)
-			if m == nil {
-				m = map[string]any{}
-			}
-			m["flow"] = fileFlow
-			res.imports[i].params = marshalMap(m)
-			res.imports[i].changes = append(res.imports[i].changes, change{action: changeUpdated, item: "inbounds[" + tag + "].flow", oldVal: panelFlow, newVal: fileFlow, detail: "文件改动，覆盖面板"})
-			return
-		}
-	}
-	var m map[string]any
-	_ = json.Unmarshal([]byte(row.Params), &m)
-	if m == nil {
-		m = map[string]any{}
-	}
-	m["flow"] = fileFlow
-	res.imports = append(res.imports, importOp{kind: "inboundParams", inboundID: row.ID, params: marshalMap(m), changes: []change{{action: changeUpdated, item: "inbounds[" + tag + "].flow", oldVal: panelFlow, newVal: fileFlow, detail: "文件改动，覆盖面板"}}})
+	res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users.flow", oldVal: panelFlow, newVal: fileFlow, detail: "文件改动，恢复面板值"})
 }

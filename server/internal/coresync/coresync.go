@@ -162,11 +162,22 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 		}
 	}
 	panel := buildPanelState(inbounds, subscriptions, cfg.PublicHost, baseline.PassthroughTags)
-	res := classify(oldParsed, fileParsed, panel)
+	res := classify(oldParsed, fileParsed, panel, baseline.LastDoc == "")
 	merged := mergeConfig(genParsed, res.passes)
 	_, mergedHash := marshalDoc(merged)
 	base.DesiredHash = mergedHash
 	base.InSync = semanticEqual(merged, fileParsed)
+	if base.InSync && baseline.LastDoc != "" {
+		// The file matching the merge does not mean the core runs
+		// it: a file-driven change (passthrough add, file-wins
+		// import) makes merged == file while the core still runs
+		// the last applied doc. Only report in sync when the last
+		// applied doc matches too, so the checker does not skip an
+		// auto-sync the core still needs.
+		if lastApplied, err := parseDoc([]byte(baseline.LastDoc)); err == nil && !semanticEqual(merged, lastApplied) {
+			base.InSync = false
+		}
+	}
 	if base.InSync {
 		// A hand-edited file can be semantically equal to the merge
 		// yet invalid (illegal passthrough content). Reporting it in
@@ -181,30 +192,80 @@ func (s *Service) Status(ctx context.Context) (Status, error) {
 	return base, nil
 }
 
-// Sync runs the full pipeline once.
+// Sync runs the full pipeline once (manual path: it bypasses the
+// auto-sync input block — an explicit manual retry is an override).
 func (s *Service) Sync(ctx context.Context) (store.SyncLogRow, error) {
 	return s.syncInternal(ctx, "sync")
 }
 
-// AutoSync is the periodic ticker's entry point: it compares the
-// desired config against the target first and only runs the pipeline
-// when they differ, so idle ticks leave no log rows and no restarts.
-// It reports whether a sync actually ran.
+// setBlockedHash records (or clears, with "") the blocked merged-config
+// hash. A failed SET is Error (the failed input would not be blocked
+// and would retry in a loop); a failed CLEAR is Warn (the stale block
+// is re-cleared on the next InSync convergence).
+func (s *Service) setBlockedHash(ctx context.Context, hash string) {
+	if err := s.st.SetBlockedHash(ctx, hash); err != nil {
+		if hash == "" {
+			s.logger.Warn("coresync: clear blocked hash failed", "error", err)
+		} else {
+			s.logger.Error("coresync: set blocked hash failed", "error", err)
+		}
+	}
+}
+
+// AutoSync is the debouncer's entry point: it compares the desired
+// config against the target first and only runs the pipeline when
+// they differ, so idle pushes leave no log rows and no restarts.
+// It reports whether a sync actually ran. A busy pipeline (another
+// sync holding the lock) reports ran=false with a "skipped" row so
+// the debouncer retries soon instead of queueing. An input that
+// failed at runtime and was rolled back is skipped until it changes.
 func (s *Service) AutoSync(ctx context.Context) (store.SyncLogRow, bool, error) {
 	st, err := s.Status(ctx)
 	if err != nil {
 		return store.SyncLogRow{}, false, err
 	}
 	if st.InSync {
+		// Converged while a block was set (e.g., the operator
+		// removed the conflicting file content by hand): the
+		// blocking input is gone, so the block must not linger
+		// stale. No row: InSync produces no rows by design. (The
+		// drift poll triggers a run for exactly this case, since
+		// InSync alone never notifies.)
+		if baseline, berr := s.st.GetSyncState(ctx); berr == nil && baseline.BlockedHash != "" {
+			s.setBlockedHash(ctx, "")
+			s.logger.Info("coresync: auto-sync cleared stale input block (converged)", "blocked", baseline.BlockedHash)
+		}
+		return store.SyncLogRow{}, false, nil
+	}
+	if baseline, berr := s.st.GetSyncState(ctx); berr == nil && baseline.BlockedHash != "" && baseline.BlockedHash == st.DesiredHash {
+		s.logger.Info("coresync: auto-sync skipped (input blocked after rollback)", "hash", st.DesiredHash)
 		return store.SyncLogRow{}, false, nil
 	}
 	row, err := s.syncInternal(ctx, "auto-sync")
+	if row.Result == "skipped" {
+		return row, false, err
+	}
 	return row, true, err
 }
 
 func (s *Service) syncInternal(ctx context.Context, action string) (store.SyncLogRow, error) {
-	s.mu.Lock()
+	// Try-lock: one sync at a time, whole pipeline. A busy pipeline
+	// reports "skipped" (logged) instead of queueing; the next
+	// tick/debounce picks the changes up (they persist in the DB).
+	if !s.mu.TryLock() {
+		s.logger.Info("coresync: sync skipped (previous sync still running)")
+		return s.log(context.Background(), action, "skipped", "", "previous sync still running; next tick/debounce picks it up")
+	}
 	defer s.mu.Unlock()
+
+	// Overall backstop: 90s. Steps have their own timeouts (check
+	// 20s, restart 30s, health 30s); the overall ctx aborts a
+	// pathological hang. Bookkeeping of a completed apply still runs
+	// (with a live ctx) so a timeout after a successful restart does
+	// not leave a stale baseline behind.
+	ctx90, cancel := context.WithTimeout(ctx, 90*time.Second)
+	defer cancel()
+	ctx = ctx90
 
 	// Snapshot the audit watermark before the pipeline runs; the
 	// post-sync marking below must only cover rows that existed
@@ -232,89 +293,95 @@ func (s *Service) syncInternal(ctx context.Context, action string) (store.SyncLo
 	}
 	genParsed, _ := parseDoc(genDoc)
 
+	// Two slots for this round: before (the pre-round version — the
+	// baseline when one exists, else the current file, which is what
+	// the core runs) and after (the merged doc below). The before
+	// slot is the rollback target; it is snapshotted once, before
+	// any restart, so rollback never re-derives anything.
+	var beforeDoc []byte
+	if baseline.LastDoc != "" {
+		beforeDoc = []byte(baseline.LastDoc)
+	}
+
 	// Missing target: a deleted file is NOT "the user deleted
 	// everything" — it bypasses classification entirely and is
 	// recreated from the panel, with a note in the change log.
 	fileBytes, ferr := os.ReadFile(s.target)
 	if os.IsNotExist(ferr) {
-		return s.applyAndRecord(ctx, action, beforeID, genDoc, genHash,
+		return s.applyAndRecord(ctx, action, beforeID, genDoc, genHash, beforeDoc,
 			"配置文件缺失，已用面板配置重建",
 			[]change{{action: changeRestoreNote, item: "配置文件", detail: "目标文件缺失（不是文件改动），已按面板配置重建；分类已跳过"}})
 	}
 	if ferr != nil {
 		return s.log(ctx, action, "error", "", "read target: "+ferr.Error())
 	}
+	if beforeDoc == nil {
+		// No baseline: the running config is the file on disk.
+		beforeDoc = fileBytes
+	}
 	// Invalid JSON: the whole file is illegal — panel-only overwrite.
 	fileParsed, perr := parseDoc(fileBytes)
 	if perr != nil {
-		return s.applyAndRecord(ctx, action, beforeID, genDoc, genHash,
+		return s.applyAndRecord(ctx, action, beforeID, genDoc, genHash, beforeDoc,
 			"配置文件不是合法 JSON，已用面板配置覆盖："+perr.Error(),
 			[]change{{action: changeDroppedIllegal, item: "配置文件", detail: "文件不是合法 JSON，已用面板配置覆盖：" + perr.Error()}})
 	}
 
-	// Baseline resolution.
+	// First import: no baseline means the panel has never synced.
+	// The file's panel-supported content is imported into the panel
+	// ONCE (backup first, import report in the change log); after
+	// this round the baseline exists and later syncs are panel-wins
+	// (file edits to managed content revert, never import).
+	firstImport := baseline.LastDoc == ""
 	var oldParsed map[string]any
-	if baseline.LastDoc != "" {
-		if p, err := parseDoc([]byte(baseline.LastDoc)); err == nil {
-			oldParsed = p
-		}
-	}
-	if oldParsed == nil {
-		// First run (or a corrupt baseline): bootstrap.
-		lastApplied := ""
-		if logs, err := s.st.ListSyncLogs(ctx, 50); err == nil {
-			for _, l := range logs {
-				if l.Result == "applied" {
-					lastApplied = l.Hash
-					break
-				}
-			}
-		}
-		if lastApplied != "" && hashBytes(fileBytes) == lastApplied {
-			// The file is untouched panel output from a previous
-			// sync (byte-identical to what the panel last
-			// applied): nothing external exists, so no
-			// classification is needed — the diff below is
-			// empty by construction.
-			oldParsed = fileParsed
-		} else {
-			pending, _ := s.st.CountPendingAudits(ctx)
-			if pending > 0 && action != "sync" {
-				// Ambiguous: the panel changed AND the file
-				// changed and there is no baseline to separate
-				// them. Auto sync must not guess — it skips,
-				// and one manual sync resolves toward the file.
-				return s.log(ctx, action, "skipped", genHash, "首次同步基线缺失且面板与文件同时有改动，无法区分来源，已跳过；手动同步一次可按文件为准解决")
-			}
-			// Manual sync resolves toward the file; no pending
-			// audits means the panel is unchanged, so the diff
-			// is purely external either way.
-			oldParsed = genParsed
-		}
+	if firstImport {
+		oldParsed = map[string]any{}
+		s.backupFirstImport(fileBytes)
+	} else if p, err := parseDoc([]byte(baseline.LastDoc)); err == nil {
+		oldParsed = p
+	} else {
+		// Corrupt baseline (panel-written docs should not corrupt):
+		// diff against empty so every file value reads as new, but
+		// never import — panel-wins still holds, and success resets
+		// the baseline to the new merged doc.
+		s.warn("baseline unparseable, diffing against empty", "error", err)
+		oldParsed = map[string]any{}
 	}
 	panel := buildPanelState(inbounds, subscriptions, cfg.PublicHost, baseline.PassthroughTags)
-	res := classify(oldParsed, fileParsed, panel)
+	res := classify(oldParsed, fileParsed, panel, firstImport)
 
-	// Apply imports (best-effort per op, verified against the store).
-	importOutcomes := s.applyImports(ctx, res.imports)
-
-	// Regenerate after imports, then merge the passthrough.
-	genDoc2, _, err := s.Generate(ctx)
-	if err != nil {
-		// Panel state already changed; the file did not. The
-		// import rows are real, so they are still recorded — but
-		// the passthrough/revert rows describe a merge that never
-		// landed, so they are dropped here.
-		row, rerr := s.log(ctx, action, "error", "", "regenerate after imports: "+err.Error())
-		if rerr == nil {
-			s.writeChangeRows(ctx, row.ID, importOutcomes)
-		}
-		return row, rerr
+	// Apply imports (first import only; post-baseline classification
+	// produces no imports by construction).
+	var importOutcomes []change
+	if len(res.imports) > 0 {
+		importOutcomes = s.applyImports(ctx, res.imports)
 	}
-	genParsed2, _ := parseDoc(genDoc2)
+
+	// Regenerate after imports, then merge the passthrough. With no
+	// imports the panel state is unchanged, so regeneration would
+	// reproduce the same doc — skip it.
+	genDoc2 := genDoc
+	genParsed2 := genParsed
+	if len(res.imports) > 0 {
+		var err error
+		genDoc2, _, err = s.Generate(ctx)
+		if err != nil {
+			// Panel state already changed; the file did not. The
+			// import rows are real, so they are still recorded —
+			// but the passthrough/revert rows describe a merge that
+			// never landed, so they are dropped here.
+			row, rerr := s.log(ctx, action, "error", "", "regenerate after imports: "+err.Error())
+			if rerr == nil {
+				s.writeChangeRows(ctx, row.ID, importOutcomes)
+			}
+			return row, rerr
+		}
+		genParsed2, _ = parseDoc(genDoc2)
+	}
 	merged := mergeConfig(genParsed2, res.passes)
 	mergedDoc, mergedHash := marshalDoc(merged)
 
+	catchUp := false
 	if semanticEqual(merged, fileParsed) {
 		// The file matches the desired config, but a hand-edited file
 		// was never validated: an illegal passthrough that happens to
@@ -326,16 +393,33 @@ func (s *Service) syncInternal(ctx context.Context, action string) (store.SyncLo
 		if ran, valid := s.checkOnly(ctx, merged); ran && !valid {
 			goto applyMerged
 		}
+		// The file matching the merge does NOT mean the core runs
+		// it: a file-driven change (passthrough add, first-import
+		// content) makes merged == file while the core still runs
+		// the last applied doc. Only skip activation when the last
+		// applied doc matches too; otherwise fall through to apply
+		// (the file already holds the content, but the core must
+		// restart to catch up). With no baseline yet (first sync)
+		// there is nothing to compare against, so keep the old
+		// behaviour for that one case.
+		if baseline.LastDoc != "" {
+			if lastApplied, err := parseDoc([]byte(baseline.LastDoc)); err == nil && !semanticEqual(merged, lastApplied) {
+				catchUp = true
+				goto applyMerged
+			}
+		}
 		// No write, no restart. The file already holds everything
-		// (including passthrough), so the baseline becomes the
-		// on-disk truth and the full change rows apply. The pending
-		// audits are marked applied too: the file already contains
-		// the panel's current state, so the edits are in effect.
+		// (including passthrough) and the core already runs it, so
+		// the baseline becomes the on-disk truth and the full change
+		// rows apply. The pending audits are marked applied too:
+		// the file already contains the panel's current state, and
+		// the running config matches it.
 		row, rerr := s.log(ctx, action, "no_change", mergedHash, "merged config matches the target file")
 		if rerr == nil {
 			all := append(append([]change{}, res.changes...), importOutcomes...)
 			s.writeChangeRows(ctx, row.ID, all)
 			_ = s.st.SetSyncState(ctx, store.SyncState{LastDoc: string(fileBytes), LastHash: hashBytes(fileBytes), PassthroughTags: s.mergedPassTags(ctx, merged), UpdatedAt: nowUnix()})
+			s.setBlockedHash(ctx, "")
 			_ = s.st.MarkPendingAuditsApplied(ctx, beforeID, mergedHash)
 		}
 		return row, rerr
@@ -355,12 +439,15 @@ applyMerged:
 		}
 	}
 
-	if aerr := s.apply(ctx, mergedDoc); aerr != nil {
+	if ctx.Err() != nil {
+		return s.log(ctx, action, "error", mergedHash, "sync timed out after 90s before apply")
+	}
+	if aerr := s.apply(ctx, mergedDoc, beforeDoc); aerr != nil {
 		if aerr.result == "check_failed" {
 			// Illegal passthrough content must never block a
 			// legitimate sync: fall back to panel-only.
 			panelOnlyDoc, panelOnlyHash := marshalDoc(genParsed2)
-			if aerr2 := s.apply(ctx, panelOnlyDoc); aerr2 != nil {
+			if aerr2 := s.apply(ctx, panelOnlyDoc, beforeDoc); aerr2 != nil {
 				row, rerr := s.log(ctx, action, aerr2.result, panelOnlyHash, aerr2.Error())
 				if rerr == nil {
 					s.writeChangeRows(ctx, row.ID, importOutcomes)
@@ -372,7 +459,30 @@ applyMerged:
 				rows := append(append([]change{}, importOutcomes...), change{action: changeDroppedIllegal, item: "透传内容", detail: "合并配置校验失败，已丢弃透传内容并用面板配置覆盖：" + aerr.Error()})
 				s.writeChangeRows(ctx, row.ID, rows)
 				_ = s.st.SetSyncState(ctx, store.SyncState{LastDoc: string(panelOnlyDoc), LastHash: panelOnlyHash, UpdatedAt: nowUnix()})
+				s.setBlockedHash(ctx, "")
 				_ = s.st.MarkPendingAuditsApplied(ctx, beforeID, panelOnlyHash)
+			}
+			return row, rerr
+		}
+		if aerr.result == "restart_failed" {
+			// Post-write runtime failure: apply() already retried
+			// and rolled back (or attempted to). The round failed:
+			// block this input from auto-retry until it changes,
+			// keep the baseline at the pre-round version, and leave
+			// the panel audits pending (the core runs the old
+			// config, so the edits are NOT applied).
+			rows := append(append([]change{}, res.changes...), importOutcomes...)
+			if aerr.rollbackAttempted {
+				if aerr.rolledBack {
+					rows = append(rows, change{action: changeRestoreNote, item: "配置文件", detail: "重启失败 3 次，已回退到本轮之前的版本并重启成功；核心运行旧配置"})
+				} else {
+					rows = append(rows, change{action: changeRestoreNote, item: "配置文件", detail: "重启失败 3 次，且回退也失败（疑似外部原因：端口/磁盘/权限/核心）；文件保持旧版本，已停止重试"})
+				}
+			}
+			row, rerr := s.log(ctx, action, "restart_failed", mergedHash, aerr.Error())
+			if rerr == nil {
+				s.writeChangeRows(ctx, row.ID, rows)
+				s.setBlockedHash(ctx, mergedHash)
 			}
 			return row, rerr
 		}
@@ -386,12 +496,24 @@ applyMerged:
 	detail := "config applied"
 	if s.unit == "" {
 		detail = "config written and validated (core restart not configured)"
+	} else if catchUp {
+		detail = "config applied (file already held the merged config; core restarted to catch up)"
+	}
+	if firstImport {
+		detail += "; first import: original file backed up, panel-supported content imported once"
 	}
 	row, rerr := s.log(ctx, action, "applied", mergedHash, detail)
 	if rerr == nil {
 		all := append(append([]change{}, res.changes...), importOutcomes...)
 		s.writeChangeRows(ctx, row.ID, all)
-		_ = s.st.SetSyncState(ctx, store.SyncState{LastDoc: string(mergedDoc), LastHash: mergedHash, PassthroughTags: s.mergedPassTags(ctx, merged), UpdatedAt: nowUnix()})
+		// Bookkeeping uses a live ctx: a 90s timeout landing after a
+		// successful restart must not leave a stale baseline behind.
+		bctx := ctx
+		if ctx.Err() != nil {
+			bctx = context.Background()
+		}
+		_ = s.st.SetSyncState(bctx, store.SyncState{LastDoc: string(mergedDoc), LastHash: mergedHash, PassthroughTags: s.mergedPassTags(bctx, merged), UpdatedAt: nowUnix()})
+		s.setBlockedHash(bctx, "")
 		// Mark every still-pending audit row from before this sync
 		// as applied by it, so the Logs page can show 待同步 / 已应
 		// 用 per edit. Best-effort: a marking failure must not fail
@@ -399,27 +521,59 @@ applyMerged:
 		// a field a pending audit row edited, that row is still
 		// marked applied — the change log is the authoritative
 		// field record, not the audit row.
-		_ = s.st.MarkPendingAuditsApplied(ctx, beforeID, mergedHash)
+		_ = s.st.MarkPendingAuditsApplied(bctx, beforeID, mergedHash)
 	}
 	return row, rerr
+}
+
+// backupFirstImport copies the pre-import file into the panel data
+// dir (0600: it may carry credentials) so the one-time import can be
+// undone by hand. Best-effort: a backup failure is logged, never
+// fails the sync (the import report in the change log still stands).
+func (s *Service) backupFirstImport(fileBytes []byte) {
+	if s.logPath == "" {
+		return
+	}
+	dataDir := filepath.Dir(filepath.Dir(s.logPath))
+	path := filepath.Join(dataDir, "first-import-backup.json")
+	if err := os.WriteFile(path, fileBytes, 0o600); err != nil {
+		s.warn("first-import backup failed", "path", path, "error", err)
+		return
+	}
+	s.logger.Info("coresync: first-import backup written", "path", path)
 }
 
 // applyAndRecord applies a panel-only doc (used by the missing-file
 // and illegal-file paths, which bypass classification) and records
 // the sync row, change rows, baseline and audit marking.
-func (s *Service) applyAndRecord(ctx context.Context, action string, beforeID int64, doc []byte, hash, detail string, rows []change) (store.SyncLogRow, error) {
+func (s *Service) applyAndRecord(ctx context.Context, action string, beforeID int64, doc []byte, hash string, beforeDoc []byte, detail string, rows []change) (store.SyncLogRow, error) {
 	if s.logPath != "" {
 		if err := os.MkdirAll(filepath.Dir(s.logPath), 0o755); err != nil {
 			return s.log(ctx, action, "error", hash, "create log directory: "+err.Error())
 		}
 	}
-	if aerr := s.apply(ctx, doc); aerr != nil {
+	if aerr := s.apply(ctx, doc, beforeDoc); aerr != nil {
+		if aerr.result == "restart_failed" {
+			// Same rollback/block treatment as the main path: the
+			// round failed after writing, so block this input.
+			note := change{action: changeRestoreNote, item: "配置文件", detail: "重启失败，已回退到本轮之前的版本"}
+			if !aerr.rolledBack {
+				note.detail = "重启失败，且回退也失败（疑似外部原因）；文件保持旧版本，已停止重试"
+			}
+			row, rerr := s.log(ctx, action, "restart_failed", hash, aerr.Error())
+			if rerr == nil {
+				s.writeChangeRows(ctx, row.ID, append(append([]change{}, rows...), note))
+				s.setBlockedHash(ctx, hash)
+			}
+			return row, rerr
+		}
 		return s.log(ctx, action, aerr.result, hash, aerr.Error())
 	}
 	row, rerr := s.log(ctx, action, "applied", hash, detail)
 	if rerr == nil {
 		s.writeChangeRows(ctx, row.ID, rows)
 		_ = s.st.SetSyncState(ctx, store.SyncState{LastDoc: string(doc), LastHash: hash, UpdatedAt: nowUnix()})
+		s.setBlockedHash(ctx, "")
 		_ = s.st.MarkPendingAuditsApplied(ctx, beforeID, hash)
 	}
 	return row, rerr
@@ -783,6 +937,12 @@ func (s *Service) ListChanges(ctx context.Context, f store.ConfigChangeFilter) (
 type applyError struct {
 	result string
 	err    error
+	// rolledBack reports whether a post-write rollback to beforeDoc
+	// succeeded and the core is healthy on it. rollbackAttempted
+	// reports whether a rollback was attempted at all (false when
+	// there was no pre-round version to roll back to).
+	rolledBack        bool
+	rollbackAttempted bool
 }
 
 func (e *applyError) Error() string { return e.err.Error() }
@@ -821,41 +981,102 @@ func (s *Service) checkOnly(ctx context.Context, doc map[string]any) (ran, valid
 	return true, true
 }
 
-func (s *Service) apply(ctx context.Context, doc []byte) *applyError {
+// apply validates doc, atomically swaps it in, and (when a unit is
+// configured) restarts the core and health-checks it. A restart or
+// health failure is retried twice (3 attempts total, ~3s waits,
+// restart-only: same file, no regenerate, no re-check) because some
+// failures are transient (old process still releasing a port).
+// When all 3 fail it rolls back to beforeDoc (the pre-round version,
+// snapshotted once before this round) and health-checks that: a
+// rollback success means the core runs the old config again (the
+// round still reports restart_failed, with the input blocked); a
+// rollback failure means the cause is outside this round's changes
+// (port/disk/permission/core) and the file is left at beforeDoc.
+// beforeDoc may be nil (no pre-round version: first sync with no
+// baseline and no file) — then there is nothing to roll back to.
+func (s *Service) apply(ctx context.Context, doc, beforeDoc []byte) *applyError {
 	dir := filepath.Dir(s.target)
 	tmp, err := os.CreateTemp(dir, ".singbox-ui-sync-*.json")
 	if err != nil {
-		return &applyError{"error", fmt.Errorf("create temp config: %w", err)}
+		return &applyError{result: "error", err: fmt.Errorf("create temp config: %w", err)}
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := tmp.Write(doc); err != nil {
 		tmp.Close()
-		return &applyError{"error", fmt.Errorf("write temp config: %w", err)}
+		return &applyError{result: "error", err: fmt.Errorf("write temp config: %w", err)}
 	}
 	if err := tmp.Close(); err != nil {
-		return &applyError{"error", fmt.Errorf("close temp config: %w", err)}
+		return &applyError{result: "error", err: fmt.Errorf("close temp config: %w", err)}
 	}
 
 	if out, err := s.runCheck(ctx, tmpPath); err != nil {
-		return &applyError{"check_failed", fmt.Errorf("sing-box check failed: %s", firstLine(out, err))}
+		return &applyError{result: "check_failed", err: fmt.Errorf("sing-box check failed: %s", firstLine(out, err))}
 	}
 
-	prev, prevErr := os.ReadFile(s.target)
 	if err := os.Rename(tmpPath, s.target); err != nil {
-		return &applyError{"error", fmt.Errorf("swap config: %w", err)}
+		return &applyError{result: "error", err: fmt.Errorf("swap config: %w", err)}
 	}
 
 	if s.unit == "" {
 		return nil
 	}
-	if err := s.restartAndCheck(ctx); err != nil {
-		// Roll back to the previous file and restart once more.
-		if prevErr == nil {
-			_ = os.WriteFile(s.target, prev, 0o644)
-			_ = s.restart(ctx)
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return &applyError{result: "error", err: ctx.Err()}
+			case <-time.After(3 * time.Second):
+			}
 		}
-		return &applyError{"restart_failed", fmt.Errorf("core restart/health failed, previous config restored: %w", err)}
+		if err := s.restartAndCheck(ctx, doc); err == nil {
+			if attempt > 0 {
+				s.logger.Info("coresync: restart succeeded on retry", "attempt", attempt+1)
+			}
+			return nil
+		} else {
+			lastErr = err
+		}
+		if ctx.Err() != nil {
+			// Overall timeout mid-retry: abort without rollback
+			// (state unknown); the caller logs it and the input
+			// gating prevents a same-input retry loop.
+			return &applyError{result: "error", err: ctx.Err()}
+		}
+	}
+	if beforeDoc == nil {
+		return &applyError{result: "restart_failed", err: fmt.Errorf("core restart/health failed after 3 attempts, no pre-round version to roll back to: %w", lastErr)}
+	}
+	if err := s.writeAtomic(beforeDoc); err != nil {
+		return &applyError{result: "restart_failed", err: fmt.Errorf("core restart/health failed after 3 attempts; rollback write failed: %w (last restart error: %v)", err, lastErr), rollbackAttempted: true}
+	}
+	if err := s.restartAndCheck(ctx, beforeDoc); err != nil {
+		return &applyError{result: "restart_failed", err: fmt.Errorf("core restart/health failed after 3 attempts; ROLLBACK ALSO FAILED (external cause suspected: port/disk/permission/core): %w (original: %v)", err, lastErr), rollbackAttempted: true}
+	}
+	return &applyError{result: "restart_failed", err: fmt.Errorf("core restart/health failed after 3 attempts; rolled back to pre-round version, core healthy on old config: %w", lastErr), rolledBack: true, rollbackAttempted: true}
+}
+
+// writeAtomic swaps doc into the target via temp file + rename, so
+// the core never reads a half-written config (and a write failure
+// leaves the previous file untouched).
+func (s *Service) writeAtomic(doc []byte) error {
+	dir := filepath.Dir(s.target)
+	tmp, err := os.CreateTemp(dir, ".singbox-ui-sync-*.json")
+	if err != nil {
+		return fmt.Errorf("create temp config: %w", err)
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if _, err := tmp.Write(doc); err != nil {
+		tmp.Close()
+		return fmt.Errorf("write temp config: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp config: %w", err)
+	}
+	if err := os.Rename(tmpPath, s.target); err != nil {
+		return fmt.Errorf("swap config: %w", err)
 	}
 	return nil
 }
@@ -879,33 +1100,159 @@ func (s *Service) restart(ctx context.Context) error {
 	return nil
 }
 
-// restartAndCheck restarts the unit and waits until it reports active
-// and the Clash API answers.
-func (s *Service) restartAndCheck(ctx context.Context) error {
+// restartAndCheck restarts the unit and polls (every 500ms, up to
+// 30s) until it reports active and the Clash API answers. It fails
+// fast when the unit is definitively dead (failed/inactive) instead
+// of polling to the deadline: a core that failed to start is not
+// coming back on its own, and a fast failure keeps the retry loop
+// short. doc is the just-applied config; its TCP listen ports are
+// checked advisory-only (a warning, never a failure — a parse miss
+// must not trigger a false rollback; unit + Clash already prove the
+// core started).
+//
+// PID-stability fail-fast: with Restart=on-failure, a core that
+// fails to start flaps (systemd respawns it every ~100ms at the
+// default interval), so is-active samples alternate active /
+// activating and a 500ms poll can miss every brief "failed" window,
+// burning the full 30s per attempt — 3 attempts + rollback then
+// exceed the 90s backstop (observed on the test box: the sync died
+// on the backstop with no rollback, no block, core left to systemd).
+// A MainPID change between two active samples proves the process is
+// flapping, so it fails fast. Success additionally requires TWO
+// consecutive same-PID samples: a flapping process that briefly
+// serves the Clash API must never count as healthy on a single
+// lucky sample. A healthy start changes PID once (old -> new, after
+// restart() returns the old process is dead) and then stays stable;
+// a zero/empty PID is transient, never compared. Non-active samples
+// do not reset the stable PID, so activating samples interleaved
+// between two differing active samples still trip the detection.
+func (s *Service) restartAndCheck(ctx context.Context, doc []byte) error {
 	if err := s.restart(ctx); err != nil {
 		return err
 	}
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
+	var stablePid string
+	stableCount := 0
 	for {
-		active := false
-		cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		out, err := exec.CommandContext(cctx, "systemctl", "is-active", s.unit).CombinedOutput()
-		cancel()
-		if err == nil && strings.TrimSpace(string(out)) == "active" {
-			active = true
+		state := s.unitState(ctx)
+		if state == "failed" || state == "inactive" {
+			return fmt.Errorf("core unit is %s", state)
 		}
-		if active {
-			if s.clashAPI == "" {
-				return nil
-			}
-			if s.clashAlive(ctx) {
-				return nil
+		if state == "active" {
+			if pid := s.unitMainPID(ctx); pid != "" && pid != "0" {
+				if stablePid == "" {
+					stablePid = pid
+					stableCount = 1
+				} else if pid != stablePid {
+					return fmt.Errorf("core process is flapping (MainPID changed %s -> %s)", stablePid, pid)
+				} else {
+					stableCount++
+				}
+				if stableCount >= 2 {
+					if s.clashAPI == "" {
+						return nil
+					}
+					if s.clashAlive(ctx) {
+						s.checkPortsAdvisory(doc)
+						return nil
+					}
+				}
 			}
 		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("core did not become healthy within 10s")
+			return fmt.Errorf("core did not become healthy within 30s")
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// unitMainPID reports the unit's main PID ("0" when none). A command
+// failure or empty output reports "" (poll, do not fail fast on it).
+func (s *Service) unitMainPID(ctx context.Context) string {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(cctx, "systemctl", "show", "-p", "MainPID", s.unit).CombinedOutput()
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return ""
+	}
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	if v, ok := strings.CutPrefix(line, "MainPID="); ok {
+		return strings.TrimSpace(v)
+	}
+	return ""
+}
+
+// unitState reports the unit's is-active state ("active", "failed",
+// "inactive", "activating", ...). A command failure with no output
+// reports "unknown" (poll, do not fail fast on it).
+func (s *Service) unitState(ctx context.Context) string {
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, _ := exec.CommandContext(cctx, "systemctl", "is-active", s.unit).CombinedOutput()
+	state := strings.TrimSpace(string(out))
+	if state == "" {
+		return "unknown"
+	}
+	return state
+}
+
+// checkPortsAdvisory warns when a TCP listen port from the applied
+// doc is not in LISTEN state (via /proc/net/tcp + tcp6, state
+// observation only — no connection is opened). Best-effort: an
+// unreadable table or an unparsable doc skips silently, and a miss
+// never fails health (unit + Clash already proved the start).
+func (s *Service) checkPortsAdvisory(doc []byte) {
+	parsed, err := parseDoc(doc)
+	if err != nil {
+		return
+	}
+	want := map[int]bool{}
+	for _, ib := range inboundList(parsed) {
+		typ := asString(ib["type"])
+		if typ == "hysteria2" || typ == "tuic" {
+			continue // UDP-only: no TCP LISTEN to check
+		}
+		if port := portOf(ib["listen_port"]); port > 0 {
+			want[port] = true
+		}
+	}
+	if len(want) == 0 {
+		return
+	}
+	listening := map[int]bool{}
+	for _, path := range []string{"/proc/net/tcp", "/proc/net/tcp6"} {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(b), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 4 || fields[0] == "sl" {
+				continue
+			}
+			if fields[3] != "0A" { // LISTEN
+				continue
+			}
+			parts := strings.Split(fields[1], ":")
+			if len(parts) != 2 {
+				continue
+			}
+			var port int
+			if _, err := fmt.Sscanf(parts[1], "%x", &port); err == nil {
+				listening[port] = true
+			}
+		}
+	}
+	for port := range want {
+		if !listening[port] {
+			s.warn("applied doc port not listening (advisory only)", "port", port)
+		}
 	}
 }
 
@@ -926,6 +1273,11 @@ func (s *Service) clashAlive(ctx context.Context) bool {
 }
 
 func (s *Service) log(ctx context.Context, action, result, hash, detail string) (store.SyncLogRow, error) {
+	// A sync row must be recorded even when the pipeline ctx timed
+	// out (otherwise a timeout leaves no trace at all).
+	if ctx.Err() != nil {
+		ctx = context.Background()
+	}
 	row := store.SyncLogRow{At: nowUnix(), Action: action, Result: result, Hash: hash, Detail: detail}
 	id, err := s.st.AddSyncLog(ctx, row)
 	if err != nil {

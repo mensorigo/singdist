@@ -263,8 +263,8 @@ func newUUID() string {
 	if _, err := rand.Read(b); err != nil {
 		return ""
 	}
-	b[6] = (b[6]&0x0f) | 0x40 // version 4
-	b[8] = (b[8]&0x3f) | 0x80 // variant 10
+	b[6] = (b[6] & 0x0f) | 0x40 // version 4
+	b[8] = (b[8] & 0x3f) | 0x80 // variant 10
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
@@ -305,14 +305,6 @@ var ss2022KeyLen = map[string]int{
 	"2022-blake3-chacha20-poly1305": 32,
 }
 
-var ssLegacyMethods = map[string]bool{
-	"aes-128-gcm":             true,
-	"aes-256-gcm":             true,
-	"chacha20-ietf-poly1305":  true,
-	"chacha20-poly1305":       true,
-	"xchacha20-ietf-poly1305": true,
-}
-
 func generateSSKey(n int) string {
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
@@ -343,16 +335,20 @@ func validateShadowsocks(p *ShadowsocksParams, creating bool) error {
 		}
 		return nil
 	}
-	if ssLegacyMethods[p.Method] {
-		if creating && p.Password == "" {
-			p.Password = randomPassword()
-		}
-		if p.Password == "" {
-			return errValidation("shadowsocks password is required")
-		}
-		return nil
+	// Legacy methods and any other method string take a free-form
+	// password. The dropdown lists the common methods as a
+	// convenience, not as the validation boundary: a real protocol
+	// method the dropdown does not list (tier 2) must store verbatim
+	// here, and the core's own check at sync time is the final
+	// validator for a bogus value (tier 3) — it blocks the sync
+	// with an error instead of silently dropping the value.
+	if creating && p.Password == "" {
+		p.Password = randomPassword()
 	}
-	return errValidation("unsupported shadowsocks method")
+	if p.Password == "" {
+		return errValidation("shadowsocks password is required")
+	}
+	return nil
 }
 
 func validateShadowsocksRaw(raw json.RawMessage, creating bool) (string, error) {

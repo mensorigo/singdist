@@ -112,6 +112,14 @@ class Panel:
                     context=ssl._create_unverified_context()))
             self._wait_ready()
             self._login()
+            if auto_sync_min == 0:
+                # Manual scenarios must not race the auto debouncer:
+                # with auto-sync on, a panel edit would auto-push
+                # within 5s/30s and the manual sync under test would
+                # see no_change instead of applied (or a skipped
+                # row). S24 (auto_sync_min=1) keeps it enabled.
+                self.api("PATCH", "/api/settings",
+                         {"autoSyncEnabled": False})
         except Exception:
             # Never leak the subprocess when construction fails.
             self.stop()
@@ -297,7 +305,7 @@ def s1_passthrough(p):
         doc["log"]["level"] = "debug"
     edit_target(edit)
     row = p.sync()
-    check("S1", "passthrough sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S1", "passthrough sync applied (core catches up) (merged already equals file)", row["result"] == "applied", str(row))
     doc = read_target()
     check("S1", "route preserved", doc.get("route", {}).get("final") == "direct")
     check("S1", "dns preserved", bool(doc.get("dns", {}).get("servers")))
@@ -308,6 +316,14 @@ def s1_passthrough(p):
               bool(change(rows, "passthrough", item)), str(rows))
     with open(os.path.join(DATA, "logs", "config-changes.log")) as f:
         logtxt = f.read()
+    # Guard: the panel has no log-level setting. If one is ever
+    # added, classifyLog's level branch must flip from
+    # passthrough to revert in the same change — this check
+    # fails until then.
+    settings = p.api("GET", "/api/settings")
+    check("S1", "no log-level panel setting (guard)",
+          "logLevel" not in settings and "log_level" not in settings,
+          str(sorted(settings.keys())))
     check("S1", "config-changes.log has route line", "route" in logtxt)
 
 
@@ -343,21 +359,21 @@ def s3_imports(p):
         ib["tls"]["server_name"] = "b.example.com"
     edit_target(edit)
     row = p.sync()
-    check("S3", "import sync no_change (merged already equals edited file)", row["result"] == "no_change", str(row))
+    check("S3", "panel-wins sync applied", row["result"] == "applied", str(row))
     cur = p.inbound_named("V3")
-    check("S3", "panel port imported", cur["port"] == 21401, str(cur))
-    check("S3", "panel sni imported", cur["params"]["sni"] == "b.example.com", str(cur["params"]))
+    check("S3", "panel port kept", cur["port"] == 21400, str(cur))
+    check("S3", "panel sni kept", cur["params"]["sni"] == "a.example.com", str(cur["params"]))
     rows = p.changes_for(row["id"])
-    pr = change(rows, "updated", "inbounds[V3].listen_port")
-    check("S3", "port change row old->new",
+    pr = change(rows, "reverted", "inbounds[V3].listen_port")
+    check("S3", "port reverted row old->new",
           len(pr) == 1 and pr[0]["oldValue"] == "21400" and pr[0]["newValue"] == "21401", str(pr))
-    sr = change(rows, "updated", "inbounds[V3].sni")
-    check("S3", "sni change row old->new",
+    sr = change(rows, "reverted", "inbounds[V3].sni")
+    check("S3", "sni reverted row old->new",
           len(sr) == 1 and sr[0]["oldValue"] == "a.example.com" and sr[0]["newValue"] == "b.example.com", str(sr))
     doc = read_target()
-    check("S3", "target reflects both",
-          target_inbound(doc, "V3")["listen_port"] == 21401
-          and target_inbound(doc, "V3")["tls"]["server_name"] == "b.example.com")
+    check("S3", "target reverted to panel values",
+          target_inbound(doc, "V3")["listen_port"] == 21400
+          and target_inbound(doc, "V3")["tls"]["server_name"] == "a.example.com")
 
 
 def s4a_hy2_uniform(p):
@@ -374,15 +390,15 @@ def s4a_hy2_uniform(p):
             u["password"] = "pw-new"
     edit_target(edit)
     row = p.sync()
-    check("S4a", "uniform password sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
-    check("S4a", "panel password imported",
-          p.inbound_named("H4a")["params"]["password"] == "pw-new")
+    check("S4a", "uniform password sync applied", row["result"] == "applied", str(row))
+    check("S4a", "panel password kept",
+          p.inbound_named("H4a")["params"]["password"] == "pw-old")
     rows = p.changes_for(row["id"])
-    pr = change(rows, "updated", "inbounds[H4a].password")
-    check("S4a", "password row hides values",
+    pr = change(rows, "reverted", "inbounds[H4a].password")
+    check("S4a", "password reverted row hides values",
           len(pr) == 1 and pr[0]["oldValue"] == "" and pr[0]["newValue"] == "", str(pr))
-    check("S4a", "target users all new",
-          all(u["password"] == "pw-new"
+    check("S4a", "target users all panel password",
+          all(u["password"] == "pw-old"
               for u in target_inbound(read_target(), "H4a")["users"]))
 
 
@@ -401,15 +417,15 @@ def s4b_hy2_divergent(p):
                 u["password"] = "pw-1"
     edit_target(edit)
     row = p.sync()
-    check("S4b", "divergent sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S4b", "divergent sync applied", row["result"] == "applied", str(row))
     check("S4b", "panel password kept",
           p.inbound_named("H4b")["params"]["password"] == "pw-old")
     users = {u["name"]: u["password"]
              for u in target_inbound(read_target(), "H4b")["users"]}
-    check("S4b", "divergent user passthrough kept",
-          users.get("SUB4b1") == "pw-1" and users.get("SUB4b2") == "pw-old", str(users))
-    check("S4b", "divergent passthrough row",
-          bool(change(p.changes_for(row["id"]), "passthrough", "inbounds[H4b].users")))
+    check("S4b", "divergent override dropped, panel password for all",
+          users.get("SUB4b1") == "pw-old" and users.get("SUB4b2") == "pw-old", str(users))
+    check("S4b", "divergent reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[H4b].users")))
 
 
 def s5a_uuid(p):
@@ -423,11 +439,13 @@ def s5a_uuid(p):
         target_inbound(doc, "V5")["users"][0]["uuid"] = new_uuid
     edit_target(edit)
     row = p.sync()
-    check("S5a", "uuid sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
-    check("S5a", "panel uuid imported", p.sub_named("SUB5")["uuid"] == new_uuid)
-    rows = change(p.changes_for(row["id"]), "updated", "inbounds[V5].users[SUB5].uuid")
-    check("S5a", "uuid row hides values",
+    check("S5a", "uuid sync applied", row["result"] == "applied", str(row))
+    check("S5a", "panel uuid kept", p.sub_named("SUB5")["uuid"] == sub["uuid"])
+    rows = change(p.changes_for(row["id"]), "reverted", "inbounds[V5].users[SUB5].uuid")
+    check("S5a", "uuid reverted row hides values",
           len(rows) == 1 and rows[0]["oldValue"] == "" and rows[0]["newValue"] == "", str(rows))
+    check("S5a", "target uuid reverted to panel uuid",
+          target_inbound(read_target(), "V5")["users"][0]["uuid"] == sub["uuid"])
 
 
 def s5b_rename(p):
@@ -440,13 +458,15 @@ def s5b_rename(p):
         target_inbound(doc, "V5b")["users"][0]["name"] = "SUB5b-new"
     edit_target(edit)
     row = p.sync()
-    check("S5b", "rename sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
-    check("S5b", "panel sub renamed", p.sub_named("SUB5b-new") is not None)
-    check("S5b", "old name gone", p.sub_named("SUB5b") is None)
-    rows = change(p.changes_for(row["id"]), "updated", "inbounds[V5b].users[SUB5b-new].name")
-    check("S5b", "rename row old->new",
+    check("S5b", "rename sync applied", row["result"] == "applied", str(row))
+    check("S5b", "panel sub name kept", p.sub_named("SUB5b") is not None)
+    check("S5b", "file name not adopted", p.sub_named("SUB5b-new") is None)
+    rows = change(p.changes_for(row["id"]), "reverted", "inbounds[V5b].users[SUB5b-new].name")
+    check("S5b", "rename reverted row old->new",
           len(rows) == 1 and rows[0]["oldValue"] == "SUB5b"
           and rows[0]["newValue"] == "SUB5b-new", str(rows))
+    check("S5b", "target user name reverted",
+          target_inbound(read_target(), "V5b")["users"][0]["name"] == "SUB5b")
 
 
 def s6a_new_trojan(p):
@@ -465,15 +485,10 @@ def s6a_new_trojan(p):
     edit_target(edit)
     row = p.sync()
     check("S6a", "new trojan sync applied", row["result"] == "applied", str(row))
-    cur = p.inbound_named("NEW6")
-    check("S6a", "panel row created", cur is not None, str(cur))
-    if cur:
-        check("S6a", "row carries file password (not random)",
-              cur["params"]["password"] == "trojan-pw", str(cur["params"]))
-        check("S6a", "row sni", cur["params"]["sni"] == "new6.example.com")
-        check("S6a", "row port", cur["port"] == 21901)
-    rows = change(p.changes_for(row["id"]), "added", "inbounds[NEW6]")
-    check("S6a", "added row notes passthrough users",
+    check("S6a", "no panel row post-baseline (never imported)",
+          p.inbound_named("NEW6") is None)
+    rows = change(p.changes_for(row["id"]), "passthrough", "inbounds[NEW6]")
+    check("S6a", "new-tag passthrough row",
           len(rows) == 1 and "透传保留" in rows[0]["detail"], str(rows))
     users = target_inbound(read_target(), "NEW6")["users"]
     check("S6a", "file user preserved in target",
@@ -493,7 +508,7 @@ def s6b_unknown_protocol(p):
         })
     edit_target(edit)
     row = p.sync()
-    check("S6b", "unknown-protocol sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S6b", "unknown-protocol sync applied (core catches up) (merged already equals file)", row["result"] == "applied", str(row))
     check("S6b", "no panel row for unknown protocol",
           p.inbound_named("UNK6") is None)
     check("S6b", "unknown inbound preserved whole",
@@ -512,17 +527,14 @@ def s7_deletion(p):
         doc["inbounds"] = [ib for ib in doc["inbounds"] if ib["tag"] != "V7"]
     edit_target(edit)
     row = p.sync()
-    check("S7", "deletion sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
-    check("S7", "panel row deleted", p.inbound_named("V7") is None)
-    rows = change(p.changes_for(row["id"]), "deleted", "inbounds[V7]")
-    check("S7", "deleted row exists", len(rows) == 1, str(rows))
-    if rows:
-        blob = json.dumps(rows[0])
-        check("S7", "deleted detail hides secrets",
-              REAL_PRIV not in blob and sub["uuid"] not in blob, blob)
-        check("S7", "deleted detail keeps port", "22100" in blob, blob)
-    check("S7", "target no longer has V7",
-          target_inbound(read_target(), "V7") is None)
+    check("S7", "deletion sync applied", row["result"] == "applied", str(row))
+    check("S7", "panel row kept (file deletion reverted)",
+          p.inbound_named("V7") is not None)
+    rows = change(p.changes_for(row["id"]), "reverted", "inbounds[V7]")
+    check("S7", "deletion reverted row exists", len(rows) == 1, str(rows))
+    check("S7", "target restores V7",
+          target_inbound(read_target(), "V7") is not None
+          and target_inbound(read_target(), "V7")["listen_port"] == 22100)
 
 
 def s8_user_absence(p):
@@ -557,7 +569,7 @@ def s9_unknown_user(p):
              "flow": "xtls-rprx-vision"})
     edit_target(edit)
     row = p.sync()
-    check("S9", "unknown-user sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S9", "unknown-user sync applied (core catches up) (merged already equals file)", row["result"] == "applied", str(row))
     check("S9", "no subscription auto-created",
           p.sub_named("STRANGER") is None)
     users = target_inbound(read_target(), "V9")["users"]
@@ -565,6 +577,36 @@ def s9_unknown_user(p):
           any(u["name"] == "STRANGER" for u in users), str(users))
     check("S9", "unknown-user passthrough row",
           bool(change(p.changes_for(row["id"]), "passthrough", "inbounds[V9].users[STRANGER]")))
+
+
+def s9b_stranger_panel_name_collision(p):
+    v = p.mk_inbound("V9b", "vless-reality", 25620, vless_params("s9b.example.com"))
+    t = p.mk_template("T9b", [v["id"]])
+    p.mk_sub("SUB9b", t["id"])
+    converge(p, "S9b")
+    # Panel creates a new sub AFTER the baseline; file adds a
+    # same-name user with a different uuid. Baseline never had
+    # COLLIDE, so without the fix this would be a stranger
+    # passthrough that merge's name dedupe then drops silently.
+    p.mk_sub("COLLIDE", t["id"])
+    panel_uuid = p.sub_named("COLLIDE")["uuid"]
+    file_uuid = str(uuid.uuid4())
+
+    def edit(doc):
+        target_inbound(doc, "V9b")["users"].append(
+            {"name": "COLLIDE", "uuid": file_uuid,
+             "flow": "xtls-rprx-vision"})
+    edit_target(edit)
+    row = p.sync()
+    users = target_inbound(read_target(), "V9b")["users"]
+    collide = [u for u in users if u["name"] == "COLLIDE"]
+    check("S9b", "panel uuid kept, single COLLIDE",
+          len(collide) == 1 and collide[0]["uuid"] == panel_uuid, str(users))
+    rows = p.changes_for(row["id"])
+    check("S9b", "collision revert row",
+          bool(change(rows, "reverted", "inbounds[V9b].users[COLLIDE]")), str(rows))
+    check("S9b", "no passthrough row for COLLIDE",
+          not change(rows, "passthrough", "inbounds[V9b].users[COLLIDE]"), str(rows))
 
 
 def s10a_hy2_uniform_host(p):
@@ -588,12 +630,16 @@ def s10a_hy2_uniform_host(p):
         target_inbound(d, "H10b")["tls"]["server_name"] = "file.example.com"
     edit_target(edit)
     row = p.sync()
-    check("S10a", "uniform host sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
-    check("S10a", "setting updated from file",
-          p.get_settings()["publicHost"] == "file.example.com")
-    rows = change(p.changes_for(row["id"]), "updated", "settings.publicHost")
-    check("S10a", "host change row",
-          len(rows) == 1 and rows[0]["newValue"] == "file.example.com", str(rows))
+    check("S10a", "uniform host sync applied", row["result"] == "applied", str(row))
+    check("S10a", "setting kept (panel wins)",
+          p.get_settings()["publicHost"] == "panel.example.com")
+    rows = change(p.changes_for(row["id"]), "reverted", "tls.server_name")
+    check("S10a", "host reverted rows (both inbounds)",
+          len(rows) == 2, str(rows))
+    doc = read_target()
+    check("S10a", "target server_names reverted to panel host",
+          target_inbound(doc, "H10a")["tls"]["server_name"] == "panel.example.com"
+          and target_inbound(doc, "H10b")["tls"]["server_name"] == "panel.example.com")
 
 
 def s10b_hy2_divergent_host(p):
@@ -613,16 +659,16 @@ def s10b_hy2_divergent_host(p):
         target_inbound(d, "H10d")["tls"]["server_name"] = "b.example.com"
     edit_target(edit)
     row = p.sync()
-    check("S10b", "divergent host sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S10b", "divergent host sync applied", row["result"] == "applied", str(row))
     check("S10b", "setting kept",
           p.get_settings()["publicHost"] == "panel.example.com")
     doc = read_target()
-    check("S10b", "per-inbound passthrough kept",
-          target_inbound(doc, "H10c")["tls"]["server_name"] == "a.example.com"
-          and target_inbound(doc, "H10d")["tls"]["server_name"] == "b.example.com")
+    check("S10b", "target server_names reverted to panel host",
+          target_inbound(doc, "H10c")["tls"]["server_name"] == "panel.example.com"
+          and target_inbound(doc, "H10d")["tls"]["server_name"] == "panel.example.com")
     rows = p.changes_for(row["id"])
-    check("S10b", "divergent passthrough rows",
-          len(change(rows, "passthrough", "tls.server_name")) == 2, str(rows))
+    check("S10b", "divergent reverted rows",
+          len(change(rows, "reverted", "tls.server_name")) == 2, str(rows))
 
 
 def s11_invalid_json(p):
@@ -696,8 +742,8 @@ def s14_reserved_port(p):
     row = p.sync()
     check("S14", "reserved-port sync applied", row["result"] == "applied", str(row))
     check("S14", "panel port kept", p.inbound_named("V14")["port"] == 23000)
-    check("S14", "reserved port dropped row",
-          bool(change(p.changes_for(row["id"]), "dropped_illegal", "inbounds[V14].listen_port")))
+    check("S14", "reserved port reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[V14].listen_port")))
     check("S14", "target port is panel port",
           target_inbound(read_target(), "V14")["listen_port"] == 23000)
 
@@ -713,13 +759,13 @@ def s15a_key_rotation(p):
         target_inbound(doc, "V15")["tls"]["reality"]["private_key"] = new_priv
     edit_target(edit)
     row = p.sync()
-    check("S15a", "rotation sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
-    check("S15a", "panel private key rotated",
-          p.inbound_named("V15")["params"]["privateKey"] == new_priv)
-    check("S15a", "rotation row hides key",
-          bool(change(p.changes_for(row["id"]), "updated", "inbounds[V15].privateKey")))
-    check("S15a", "target key rotated",
-          target_inbound(read_target(), "V15")["tls"]["reality"]["private_key"] == new_priv)
+    check("S15a", "rotation sync applied", row["result"] == "applied", str(row))
+    check("S15a", "panel private key kept",
+          p.inbound_named("V15")["params"]["privateKey"] == REAL_PRIV)
+    check("S15a", "rotation reverted row hides key",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[V15].privateKey")))
+    check("S15a", "target key is panel key",
+          target_inbound(read_target(), "V15")["tls"]["reality"]["private_key"] == REAL_PRIV)
 
 
 def s15b_invalid_key(p):
@@ -735,8 +781,8 @@ def s15b_invalid_key(p):
     check("S15b", "invalid-key sync applied", row["result"] == "applied", str(row))
     check("S15b", "panel key kept",
           p.inbound_named("V15b")["params"]["privateKey"] == REAL_PRIV)
-    check("S15b", "invalid params dropped row",
-          bool(change(p.changes_for(row["id"]), "dropped_illegal", "inbounds[V15b]")))
+    check("S15b", "invalid params reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[V15b]")))
     check("S15b", "target key is panel key",
           target_inbound(read_target(), "V15b")["tls"]["reality"]["private_key"] == REAL_PRIV)
 
@@ -753,8 +799,10 @@ def s16_bad_uuid(p):
     row = p.sync()
     check("S16", "bad-uuid sync applied", row["result"] == "applied", str(row))
     check("S16", "panel uuid kept", p.sub_named("SUB16")["uuid"] == sub["uuid"])
-    check("S16", "bad uuid dropped row",
-          bool(change(p.changes_for(row["id"]), "dropped_illegal", "inbounds[V16].users[SUB16].uuid")))
+    check("S16", "bad uuid reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[V16].users[SUB16].uuid")))
+    check("S16", "target uuid is panel uuid",
+          target_inbound(read_target(), "V16")["users"][0]["uuid"] == sub["uuid"])
 
 
 def s17_ss_method(p):
@@ -771,8 +819,10 @@ def s17_ss_method(p):
     check("S17", "bad-method sync applied", row["result"] == "applied", str(row))
     check("S17", "panel method kept",
           p.inbound_named("S17")["params"]["method"] == "aes-256-gcm")
-    check("S17", "bad method dropped row",
-          bool(change(p.changes_for(row["id"]), "dropped_illegal", "inbounds[S17].method")))
+    check("S17", "bad method reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[S17].method")))
+    check("S17", "target method is panel method",
+          target_inbound(read_target(), "S17")["method"] == "aes-256-gcm")
 
 
 def s18_tuic_congestion(p):
@@ -790,8 +840,10 @@ def s18_tuic_congestion(p):
     check("S18", "bad-congestion sync applied", row["result"] == "applied", str(row))
     check("S18", "panel congestion kept",
           p.inbound_named("T18")["params"]["congestionControl"] == "bbr")
-    check("S18", "bad congestion dropped row",
-          bool(change(p.changes_for(row["id"]), "dropped_illegal", "inbounds[T18].congestionControl")))
+    check("S18", "bad congestion reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[T18].congestionControl")))
+    check("S18", "target congestion is panel value",
+          target_inbound(read_target(), "T18")["congestion_control"] == "bbr")
 
 
 def s19_type_change(p):
@@ -823,13 +875,13 @@ def s20a_short_id_list(p):
         target_inbound(doc, "V20")["tls"]["reality"]["short_id"] = ["abcd1234", "eeeeffff"]
     edit_target(edit)
     row = p.sync()
-    check("S20a", "short_id-list sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S20a", "short_id-list sync applied", row["result"] == "applied", str(row))
     check("S20a", "panel shortId kept",
           p.inbound_named("V20")["params"]["shortId"] == "abcd1234")
-    check("S20a", "list preserved verbatim",
-          target_inbound(read_target(), "V20")["tls"]["reality"]["short_id"] == ["abcd1234", "eeeeffff"])
-    check("S20a", "short_id passthrough row",
-          bool(change(p.changes_for(row["id"]), "passthrough", "inbounds[V20].tls.reality.short_id")))
+    check("S20a", "list dropped, panel single short_id restored",
+          target_inbound(read_target(), "V20")["tls"]["reality"]["short_id"] == ["abcd1234"])
+    check("S20a", "short_id reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[V20].tls.reality.short_id")))
 
 
 def s20b_short_id_removed(p):
@@ -842,13 +894,13 @@ def s20b_short_id_removed(p):
         del target_inbound(doc, "V20b")["tls"]["reality"]["short_id"]
     edit_target(edit)
     row = p.sync()
-    check("S20b", "short_id-removed sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S20b", "short_id-removed sync applied", row["result"] == "applied", str(row))
     check("S20b", "panel shortId kept (not randomized)",
           p.inbound_named("V20b")["params"]["shortId"] == "abcd1234")
-    check("S20b", "target omits short_id (not re-randomized)",
-          "short_id" not in target_inbound(read_target(), "V20b")["tls"]["reality"])
-    check("S20b", "removal passthrough row",
-          bool(change(p.changes_for(row["id"]), "passthrough", "inbounds[V20b].tls.reality.short_id")))
+    check("S20b", "target restores short_id",
+          target_inbound(read_target(), "V20b")["tls"]["reality"]["short_id"] == ["abcd1234"])
+    check("S20b", "removal reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[V20b].tls.reality.short_id")))
 
 
 def s21_flow_removed(p):
@@ -862,14 +914,14 @@ def s21_flow_removed(p):
             u.pop("flow", None)
     edit_target(edit)
     row = p.sync()
-    check("S21", "flow-removed sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S21", "flow-removed sync applied", row["result"] == "applied", str(row))
     check("S21", "panel flow kept (not vision)",
           p.inbound_named("V21")["params"]["flow"] == "xtls-rprx-vision")
     users = target_inbound(read_target(), "V21")["users"]
-    check("S21", "target users omit flow (not vision)",
-          all("flow" not in u for u in users), str(users))
-    check("S21", "flow removal passthrough row",
-          bool(change(p.changes_for(row["id"]), "passthrough", "inbounds[V21].users.flow")))
+    check("S21", "target users have flow restored",
+          all(u.get("flow") == "xtls-rprx-vision" for u in users), str(users))
+    check("S21", "flow removal reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted", "inbounds[V21].users.flow")))
 
 
 def s22_disabled_readded(p):
@@ -883,15 +935,15 @@ def s22_disabled_readded(p):
         target_inbound(doc, "V22")["listen_port"] = 24001
     edit_target(edit)
     row = p.sync()
-    check("S22", "re-add sync no_change (merged already equals file)", row["result"] == "no_change", str(row))
+    check("S22", "disabled re-add sync applied", row["result"] == "applied", str(row))
     cur = p.inbound_named("V22")
-    check("S22", "row re-enabled", cur["enabled"] is True, str(cur))
-    check("S22", "file port adopted", cur["port"] == 24001, str(cur))
+    check("S22", "row stays disabled", cur["enabled"] is False, str(cur))
+    check("S22", "file port not adopted", cur["port"] == 24000, str(cur))
     rows = p.changes_for(row["id"])
-    check("S22", "enable row",
-          bool(change(rows, "updated", "inbounds[V22].enabled")), str(rows))
-    check("S22", "port row",
-          bool(change(rows, "updated", "inbounds[V22].listen_port")), str(rows))
+    check("S22", "disabled reverted row",
+          bool(change(rows, "reverted", "inbounds[V22]")), str(rows))
+    check("S22", "target drops the disabled inbound",
+          target_inbound(read_target(), "V22") is None)
 
 
 def s23_panel_created_conflict(p):
@@ -921,9 +973,13 @@ def s23_panel_created_conflict(p):
           ib["type"] == "vless" and ib["listen_port"] == 24101, str(ib))
 
 
-def s24_ambiguous_first_run(p):
-    # No converge: panel rows are pending, the file is hand-written,
-    # there is no baseline. Auto sync must skip; manual resolves.
+def s24_first_import_auto(p):
+    # No baseline: the first auto-sync IS the first import (no more
+    # ambiguity skip). Panel rows are pending, the file is
+    # hand-written and matches the panel row, plus a route segment
+    # (passthrough) and one illegal entry (no tag, dropped).
+    # The file is written immediately after the panel rows, well
+    # inside the 5s quiet window, so the first auto push sees it.
     v = p.mk_inbound("V24", "vless-reality", 24200, vless_params("s24.example.com"))
     t = p.mk_template("T24", [v["id"]])
     sub = p.mk_sub("SUB24", t["id"])
@@ -945,25 +1001,32 @@ def s24_ambiguous_first_run(p):
         "route": {"rules": [], "final": "direct"},
     }
     # Illegal entry (no tag): dropped by classify, so the desired merge
-    # differs from the file and auto-sync really has to decide.
+    # differs from the file and auto-sync really has to run.
     doc["inbounds"] = doc["inbounds"] + [{"type": "vless", "listen_port": 29999}]
     write_target(doc)
-    skipped = None
-    for _ in range(22):  # ~110s: ticker fires at +60s
+    auto = None
+    for _ in range(8):  # ~40s: debouncer 5s quiet + 5s drift poll
         for r in p.sync_log(20):
-            if r["action"] == "auto-sync" and r["result"] == "skipped":
-                skipped = r
+            if r["action"] == "auto-sync" and r["result"] == "applied":
+                auto = r
                 break
-        if skipped:
+        if auto:
             break
         time.sleep(5)
-    check("S24", "auto sync skipped (ambiguous)", skipped is not None,
+    check("S24", "first auto-sync applied (first import)", auto is not None,
           str(p.sync_log(20)))
-    row = p.sync()
-    check("S24", "manual sync resolves applied", row["result"] == "applied", str(row))
-    check("S24", "route preserved after manual resolve",
+    if auto:
+        check("S24", "first-import detail noted",
+              "first import" in (auto.get("detail") or ""), str(auto))
+    check("S24", "first-import backup written",
+          os.path.exists(os.path.join(DATA, "first-import-backup.json")))
+    check("S24", "route preserved after first import",
           read_target().get("route", {}).get("final") == "direct")
     check("S24", "panel row intact", p.inbound_named("V24") is not None)
+    check("S24", "target keeps V24",
+          target_inbound(read_target(), "V24") is not None)
+    row = p.sync()
+    check("S24", "manual sync after import no_change", row["result"] == "no_change", str(row))
 
 
 def s25_missing_file(p):
@@ -1012,9 +1075,11 @@ def s27_idempotency(p):
         target_inbound(doc, "V27")["listen_port"] = 24501
     edit_target(edit)
     row1 = p.sync()
-    check("S27", "first sync no_change (merged already equals file)", row1["result"] == "no_change", str(row1))
-    rows1 = change(p.changes_for(row1["id"]), "updated", "inbounds[V27].listen_port")
-    check("S27", "exactly one port row on first sync", len(rows1) == 1, str(rows1))
+    check("S27", "first sync applied", row1["result"] == "applied", str(row1))
+    rows1 = change(p.changes_for(row1["id"]), "reverted", "inbounds[V27].listen_port")
+    check("S27", "exactly one port reverted row on first sync", len(rows1) == 1, str(rows1))
+    check("S27", "target port reverted to panel port",
+          target_inbound(read_target(), "V27")["listen_port"] == 24500)
     row2 = p.sync()
     check("S27", "second sync no_change", row2["result"] == "no_change", str(row2))
     check("S27", "no duplicate rows on second sync",
@@ -1132,16 +1197,20 @@ def s0g_steady_state_silent(p):
                 u["password"] = "pw-1"
     edit_target(edit)
     row1 = p.sync()
-    check("S0g", "first sync no_change (passthrough already in file, nothing to rewrite)", row1["result"] == "no_change", str(row1))
-    check("S0g", "divergent row logged once",
-          len(change(p.changes_for(row1["id"]), "passthrough", "inbounds[H0g].users")) == 1)
+    check("S0g", "first sync applied", row1["result"] == "applied", str(row1))
+    check("S0g", "divergent reverted row logged once",
+          len(change(p.changes_for(row1["id"]), "reverted", "inbounds[H0g].users")) == 1)
+    users = {u["name"]: u["password"]
+             for u in target_inbound(read_target(), "H0g")["users"]}
+    check("S0g", "target users reverted to panel password",
+          users.get("SUB0g1") == "pw-old" and users.get("SUB0g2") == "pw-old", str(users))
     row2 = p.sync()
     check("S0g", "second sync no_change", row2["result"] == "no_change", str(row2))
     check("S0g", "no duplicate rows on steady state",
           p.changes_for(row2["id"]) == [], str(p.changes_for(row2["id"])))
 
 
-def s0h_simultaneous_file_wins(p):
+def s0h_simultaneous_panel_wins(p):
     v = p.mk_inbound("V0h", "vless-reality", 25600, vless_params("s0h.example.com"))
     t = p.mk_template("T0h", [v["id"]])
     p.mk_sub("SUB0h", t["id"])
@@ -1154,26 +1223,182 @@ def s0h_simultaneous_file_wins(p):
         target_inbound(doc, "V0h")["listen_port"] = 25602
     edit_target(edit)
     row = p.sync()
-    check("S0h", "simultaneous edit: file wins",
-          p.inbound_named("V0h")["port"] == 25602)
-    rows = change(p.changes_for(row["id"]), "updated", "inbounds[V0h].listen_port")
-    check("S0h", "row shows panel value replaced by file value",
+    check("S0h", "simultaneous edit: panel wins",
+          p.inbound_named("V0h")["port"] == 25601)
+    rows = change(p.changes_for(row["id"]), "reverted", "inbounds[V0h].listen_port")
+    check("S0h", "row shows file value reverted to panel value",
           len(rows) == 1 and rows[0]["oldValue"] == "25601"
           and rows[0]["newValue"] == "25602", str(rows))
+    check("S0h", "target port is panel port",
+          target_inbound(read_target(), "V0h")["listen_port"] == 25601)
+
+
+def s0i_panel_file_different_fields(p):
+    v = p.mk_inbound("V0i", "vless-reality", 25610, vless_params("s0i.example.com"))
+    t = p.mk_template("T0i", [v["id"]])
+    p.mk_sub("SUB0i", t["id"])
+    converge(p, "S0i")
+    cur = p.inbound_named("V0i")
+    # Panel changes A (port); file changes B (sni) — different fields.
+    p.api("PATCH", f"/api/inbounds/{v['id']}",
+          {"name": "V0i", "port": 25611, "params": cur["params"]})
+
+    def edit(doc):
+        target_inbound(doc, "V0i")["tls"]["server_name"] = "evil.example.com"
+    edit_target(edit)
+    row = p.sync()
+    check("S0i", "panel port kept", p.inbound_named("V0i")["port"] == 25611)
+    check("S0i", "target port is panel port",
+          target_inbound(read_target(), "V0i")["listen_port"] == 25611)
+    check("S0i", "target sni is panel sni",
+          target_inbound(read_target(), "V0i")["tls"]["server_name"] == "s0i.example.com")
+    rows = change(p.changes_for(row["id"]), "reverted", "inbounds[V0i].sni")
+    check("S0i", "file sni reverted row",
+          len(rows) == 1 and rows[0]["oldValue"] == "s0i.example.com"
+          and rows[0]["newValue"] == "evil.example.com", str(rows))
+    check("S0i", "no port revert row (panel edit converges silently)",
+          len(change(p.changes_for(row["id"]), "reverted", "inbounds[V0i].listen_port")) == 0,
+          str(p.changes_for(row["id"])))
+
+
+def s28_first_import(p):
+    # Fresh panel, hand-written file: modelled vless + trojan + SS
+    # (tier-2 custom method) are imported once as panel rows;
+    # route and an unknown-protocol inbound stay passthrough; the
+    # original file is backed up.
+    doc = {
+        "log": {"level": "info", "timestamp": True,
+                "output": os.path.join(DATA, "logs", "sing-box.log")},
+        "experimental": {"clash_api": {"external_controller": "127.0.0.1:9090"}},
+        "inbounds": [
+            {"tag": "V28", "listen": "::", "listen_port": 24600,
+             "type": "vless",
+             "users": [{"name": "FILEUSER", "uuid": str(uuid.uuid4()),
+                        "flow": "xtls-rprx-vision"}],
+             "tls": {"enabled": True, "server_name": "s28.example.com",
+                     "reality": {"enabled": True, "private_key": REAL_PRIV,
+                                 "handshake": {"server": "s28.example.com",
+                                               "server_port": 443},
+                                 "short_id": [REAL_SHORT]}}},
+            {"tag": "T28", "listen": "::", "listen_port": 24601,
+             "type": "trojan",
+             "users": [{"name": "someone", "password": "trojan-pw"}],
+             "tls": {"enabled": True, "server_name": "s28t.example.com"}},
+            {"tag": "S28ss", "listen": "::", "listen_port": 24602,
+             "type": "shadowsocks", "method": "xchacha20-ietf-poly1305",
+             "password": "ss-pw"},
+            {"tag": "UNK28", "listen": "::", "listen_port": 24603,
+             "type": "wireguard", "peers": []},
+        ],
+        "outbounds": [{"tag": "direct", "type": "direct"}],
+        "route": {"rules": [], "final": "direct"},
+    }
+    write_target(doc)
+    row = p.sync()
+    check("S28", "first-import sync applied", row["result"] == "applied", str(row))
+    v28 = p.inbound_named("V28")
+    check("S28", "vless row imported", v28 is not None
+          and v28["port"] == 24600
+          and v28["params"]["sni"] == "s28.example.com", str(v28))
+    t28 = p.inbound_named("T28")
+    check("S28", "trojan row imported with file password", t28 is not None
+          and t28["params"]["password"] == "trojan-pw", str(t28))
+    s28 = p.inbound_named("S28ss")
+    check("S28", "SS row imported with custom method verbatim", s28 is not None
+          and s28["params"]["method"] == "xchacha20-ietf-poly1305", str(s28))
+    check("S28", "no row for unknown protocol", p.inbound_named("UNK28") is None)
+    rows = p.changes_for(row["id"])
+    for tag in ("V28", "T28", "S28ss"):
+        check("S28", f"added row {tag}",
+              bool(change(rows, "added", f"inbounds[{tag}]")), str(rows))
+    check("S28", "route passthrough row",
+          bool(change(rows, "passthrough", "route")), str(rows))
+    check("S28", "unknown passthrough row",
+          bool(change(rows, "passthrough", "inbounds[UNK28]")), str(rows))
+    check("S28", "first-import backup written",
+          os.path.exists(os.path.join(DATA, "first-import-backup.json")))
+    doc = read_target()
+    check("S28", "route preserved", doc.get("route", {}).get("final") == "direct")
+    check("S28", "unknown preserved whole",
+          target_inbound(doc, "UNK28") is not None)
+    check("S28", "file user preserved",
+          any(u["name"] == "FILEUSER"
+              for u in target_inbound(doc, "V28")["users"]))
+    check("S28", "SS method generated verbatim",
+          target_inbound(doc, "S28ss")["method"] == "xchacha20-ietf-poly1305")
+
+
+def s29_extra_field_dropped(p):
+    v = p.mk_inbound("V29", "vless-reality", 24700, vless_params("s29.example.com"))
+    t = p.mk_template("T29", [v["id"]])
+    p.mk_sub("SUB29", t["id"])
+    converge(p, "S29")
+
+    def edit(doc):
+        target_inbound(doc, "V29")["tls"]["reality"]["max_time_difference"] = 60
+    edit_target(edit)
+    row = p.sync()
+    check("S29", "extra-field sync applied", row["result"] == "applied", str(row))
+    check("S29", "extra field reverted row",
+          bool(change(p.changes_for(row["id"]), "reverted",
+                       "inbounds[V29].tls.reality.max_time_difference")))
+    check("S29", "extra field dropped from target",
+          "max_time_difference" not in
+          target_inbound(read_target(), "V29")["tls"]["reality"])
+
+
+def s30_ss_custom_method_api(p):
+    # Tier 2: a real protocol value outside the fixed dropdown is
+    # stored verbatim via the API (previously rejected).
+    v = p.mk_inbound("S30", "shadowsocks", 24710,
+                     {"method": "xchacha20-ietf-poly1305", "password": "ss-pw"})
+    t = p.mk_template("T30", [v["id"]])
+    p.mk_sub("SUB30", t["id"])
+    check("S30", "custom method accepted by API",
+          p.inbound_named("S30")["params"]["method"] == "xchacha20-ietf-poly1305")
+    converge(p, "S30")
+    check("S30", "custom method stored verbatim",
+          p.inbound_named("S30")["params"]["method"] == "xchacha20-ietf-poly1305")
+    check("S30", "custom method generated verbatim",
+          target_inbound(read_target(), "S30")["method"] == "xchacha20-ietf-poly1305")
+
+
+def s31_mixed_revert_preserve(p):
+    v = p.mk_inbound("V31", "vless-reality", 24800, vless_params("s31.example.com"))
+    t = p.mk_template("T31", [v["id"]])
+    p.mk_sub("SUB31", t["id"])
+    converge(p, "S31")
+
+    def edit(doc):
+        target_inbound(doc, "V31")["listen_port"] = 24801
+        doc["route"] = {"rules": [], "final": "direct"}
+    edit_target(edit)
+    row = p.sync()
+    check("S31", "mixed sync applied", row["result"] == "applied", str(row))
+    doc = read_target()
+    check("S31", "managed port reverted to panel port",
+          target_inbound(doc, "V31")["listen_port"] == 24800)
+    check("S31", "unmanaged route preserved",
+          doc.get("route", {}).get("final") == "direct")
+    rows = p.changes_for(row["id"])
+    check("S31", "reverted row for port",
+          bool(change(rows, "reverted", "inbounds[V31].listen_port")), str(rows))
+    check("S31", "passthrough row for route",
+          bool(change(rows, "passthrough", "route")), str(rows))
 
 
 SCENARIOS = [
     ("S0", s0_panel_only, 0), ("S0b", s0b_panel_password_kept, 0),
     ("S0c", s0c_panel_rename_kept, 0), ("S0d", s0d_panel_host_kept, 0),
     ("S0e", s0e_panel_disable_wins, 0), ("S0f", s0f_panel_flow_kept, 0),
-    ("S0g", s0g_steady_state_silent, 0), ("S0h", s0h_simultaneous_file_wins, 0),
+    ("S0g", s0g_steady_state_silent, 0), ("S0h", s0h_simultaneous_panel_wins, 0), ("S0i", s0i_panel_file_different_fields, 0),
     ("S1", s1_passthrough, 0),
     ("S2", s2_formatting, 0), ("S3", s3_imports, 0),
     ("S4a", s4a_hy2_uniform, 0), ("S4b", s4b_hy2_divergent, 0),
     ("S5a", s5a_uuid, 0), ("S5b", s5b_rename, 0),
     ("S6a", s6a_new_trojan, 0), ("S6b", s6b_unknown_protocol, 0),
     ("S7", s7_deletion, 0), ("S8", s8_user_absence, 0),
-    ("S9", s9_unknown_user, 0), ("S10a", s10a_hy2_uniform_host, 0),
+    ("S9", s9_unknown_user, 0), ("S9b", s9b_stranger_panel_name_collision, 0), ("S10a", s10a_hy2_uniform_host, 0),
     ("S10b", s10b_hy2_divergent_host, 0), ("S11", s11_invalid_json, 0),
     ("S12", s12_duplicate_tag, 0), ("S13", s13_bad_entries, 0),
     ("S14", s14_reserved_port, 0), ("S15a", s15a_key_rotation, 0),
@@ -1182,8 +1407,10 @@ SCENARIOS = [
     ("S19", s19_type_change, 0), ("S20a", s20a_short_id_list, 0),
     ("S20b", s20b_short_id_removed, 0), ("S21", s21_flow_removed, 0),
     ("S22", s22_disabled_readded, 0), ("S23", s23_panel_created_conflict, 0),
-    ("S24", s24_ambiguous_first_run, 1), ("S25", s25_missing_file, 0),
+    ("S24", s24_first_import_auto, 1), ("S25", s25_missing_file, 0),
     ("S26", s26_check_fallback, 0), ("S27", s27_idempotency, 0),
+    ("S28", s28_first_import, 0), ("S29", s29_extra_field_dropped, 0),
+    ("S30", s30_ss_custom_method_api, 0), ("S31", s31_mixed_revert_preserve, 0),
 ]
 
 

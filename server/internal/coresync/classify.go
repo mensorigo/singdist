@@ -493,7 +493,21 @@ type classifyResult struct {
 // classify diffs fileDoc against oldDoc (the last-written baseline)
 // using panel state for identity matching. It never writes anything;
 // import ops and change records are applied by the caller.
-func classify(oldDoc, fileDoc map[string]any, panel panelState) classifyResult {
+//
+// Panel-wins rule: the panel is the source of truth for managed
+// content. A file edit to managed content (a panel row's port,
+// params, users, or the shared hy2 host setting) is REVERTED by
+// regeneration — never imported. Only the FIRST import (firstImport,
+// when no baseline exists) imports file content into the panel, once.
+// Panel-unmanaged data is preserved: whole unmanaged inbounds,
+// top-level segments, log.level, non-clash experimental keys, extra
+// outbounds, and unknown users inside managed inbounds (kept working
+// as passthrough until a template binds them). Extra hand-added
+// FIELDS inside a panel-managed inbound are dropped on regen (the
+// whole inbound is panel-generated); whole unmanaged segments are
+// preserved. A field the panel cannot model at all (tier 1) is
+// passthrough only when it lives outside a managed inbound.
+func classify(oldDoc, fileDoc map[string]any, panel panelState, firstImport bool) classifyResult {
 	res := classifyResult{passes: newPassSpec()}
 	oldInbounds := inboundList(oldDoc)
 	fileInbounds, bad := inboundListChecked(fileDoc)
@@ -517,7 +531,7 @@ func classify(oldDoc, fileDoc map[string]any, panel panelState) classifyResult {
 	classifyLog(oldDoc, fileDoc, &res)
 	classifyExperimental(oldDoc, fileDoc, &res)
 	classifyOutbounds(oldDoc, fileDoc, &res)
-	classifyInbounds(oldDoc, fileDoc, oldByTag, fileByTag, panel, &res)
+	classifyInbounds(oldDoc, fileDoc, oldByTag, fileByTag, panel, firstImport, &res)
 	return res
 }
 

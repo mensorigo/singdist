@@ -124,7 +124,23 @@ func mergeConfig(generated map[string]any, passes *passSpec) map[string]any {
 		}
 		for _, appendU := range ip.userAppend {
 			if m, ok := asMap(deepCopyJSON(appendU)); ok {
-				users = append(users, m)
+				// Panel-wins: a generated user of the same name
+				// already carries the panel values; appending the
+				// file copy would duplicate the user. (First
+				// import's converged branch appends file users
+				// that bound subs already generate; without this
+				// dedupe the baseline holds the duplicate and the
+				// next sync re-applies instead of no_change.)
+				dup := false
+				for _, u := range users {
+					if asString(u["name"]) == asString(m["name"]) {
+						dup = true
+						break
+					}
+				}
+				if !dup {
+					users = append(users, m)
+				}
 			}
 		}
 		// userList returns []map[string]any; writing it back would change

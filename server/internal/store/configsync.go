@@ -77,11 +77,14 @@ func (s *Store) ListConfigChanges(ctx context.Context, f ConfigChangeFilter) ([]
 
 // SyncState is the classifier baseline: the config bytes as last
 // written (or observed) by the sync engine, plus the passthrough tag
-// set from that same sync.
+// set from that same sync. BlockedHash is the merged-config hash of
+// an input that failed at runtime and was rolled back; auto-sync
+// skips that input until it changes.
 type SyncState struct {
 	LastDoc         string
 	LastHash        string
 	PassthroughTags []string
+	BlockedHash     string
 	UpdatedAt       int64
 }
 
@@ -110,8 +113,8 @@ func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
 	var st SyncState
 	var tagsJSON string
 	err := s.db.QueryRowContext(ctx,
-		`SELECT last_doc, last_hash, passthrough_tags, updated_at FROM sync_state WHERE id = 1`).
-		Scan(&st.LastDoc, &st.LastHash, &tagsJSON, &st.UpdatedAt)
+		`SELECT last_doc, last_hash, passthrough_tags, blocked_hash, updated_at FROM sync_state WHERE id = 1`).
+		Scan(&st.LastDoc, &st.LastHash, &tagsJSON, &st.BlockedHash, &st.UpdatedAt)
 	if err != nil {
 		// No row yet: first run after upgrade. Callers treat an empty
 		// LastDoc as "no baseline" and bootstrap conservatively.
@@ -133,6 +136,20 @@ func (s *Store) SetSyncState(ctx context.Context, st SyncState) error {
 		st.LastDoc, st.LastHash, tagsJSON, st.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("store: set sync state: %w", err)
+	}
+	return nil
+}
+
+// SetBlockedHash records (or clears, with "") the merged-config hash
+// of an input that failed at runtime and was rolled back. It touches
+// only the block column so a block update never clobbers the baseline.
+func (s *Store) SetBlockedHash(ctx context.Context, hash string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO sync_state (id, blocked_hash) VALUES (1, ?)
+		 ON CONFLICT(id) DO UPDATE SET blocked_hash = excluded.blocked_hash`,
+		hash)
+	if err != nil {
+		return fmt.Errorf("store: set blocked hash: %w", err)
 	}
 	return nil
 }

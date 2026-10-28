@@ -146,8 +146,6 @@ export default function App() {
       onToggleTheme={toggleTheme}
       onLogout={handleLogout}
       onRefresh={handleRefresh}
-      syncRefreshSignal={refreshNonce}
-      onSynced={handleRefresh}
       textSelectable={textSelectable}
     >
       {route === "dashboard" && (
