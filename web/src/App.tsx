@@ -9,6 +9,7 @@ import DashboardPage from "@/pages/DashboardPage";
 import InboundsPage from "@/pages/InboundsPage";
 import LoginPage from "@/pages/LoginPage";
 import LogsPage from "@/pages/LogsPage";
+import NodesPage from "@/pages/NodesPage";
 import SecurityPage from "@/pages/SecurityPage";
 import SettingsPage from "@/pages/SettingsPage";
 import SubscriptionsPage from "@/pages/SubscriptionsPage";
@@ -157,6 +158,7 @@ export default function App() {
       {route === "inbounds" && (
         <InboundsPage refreshSignal={refreshNonce} showWarnings={showWarnings} />
       )}
+      {route === "nodes" && <NodesPage refreshSignal={refreshNonce} />}
       {route === "certificates" && (
         <CertificatesPage
           refreshSignal={refreshNonce}

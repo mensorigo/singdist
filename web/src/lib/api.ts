@@ -151,6 +151,67 @@ export interface CertList {
   versions: CertInfo[];
 }
 
+export interface NodeView {
+  id: number;
+  name: string;
+  address: string;
+  publicHost: string;
+  tlsMode: string;
+  usageRatio: number;
+  online: boolean;
+  lastPushAt: number;
+  lastPushResult: string;
+  lastError: string;
+  lastOnlineAt: number;
+  lastInboundCount: number;
+  lastVersion: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface NodeDetail {
+  node: NodeView;
+  inboundIds: number[];
+}
+
+export interface NodeCreate {
+  name: string;
+  address: string;
+  token: string;
+  publicHost?: string;
+  tlsMode?: string;
+  usageRatio?: number;
+  addToAllInbounds?: boolean;
+}
+
+export interface NodeUpdate {
+  name?: string;
+  address?: string;
+  token?: string;
+  publicHost?: string;
+  tlsMode?: string;
+  usageRatio?: number;
+}
+
+export interface AgentStatusInbound {
+  name: string;
+  protocol: string;
+  port: number;
+  source: string;
+  listening?: boolean;
+}
+
+export interface AgentStatus {
+  unitActive: string;
+  clashAlive: boolean;
+  version?: string;
+  lastHash: string;
+  lastSyncAt: number;
+  lastResult: string;
+  blockedHash?: string;
+  inbounds: AgentStatusInbound[];
+}
+
 export const api = {
   status: () => request<AuthStatus>("/api/auth/status"),
   login: (username: string, password: string) =>
@@ -249,6 +310,45 @@ export const api = {
     keypair: () =>
       request<RealityKeypair>("/api/inbounds/reality-keypair", {
         method: "POST",
+      }),
+  },
+  nodes: {
+    list: () => request<NodeView[]>("/api/nodes"),
+    get: (id: number) => request<NodeDetail>(`/api/nodes/${id}`),
+    create: (body: NodeCreate) =>
+      request<NodeView>("/api/nodes", {
+        method: "POST",
+        body: JSON.stringify(body),
+      }),
+    update: (id: number, body: NodeUpdate) =>
+      request<NodeView>(`/api/nodes/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    remove: (id: number) =>
+      request<{ ok: boolean; warning: string }>(`/api/nodes/${id}`, {
+        method: "DELETE",
+      }),
+    push: (id: number) =>
+      request<{ started: boolean; busy: boolean }>(
+        `/api/nodes/${id}/push`,
+        { method: "POST" },
+      ),
+    clearBlock: (id: number) =>
+      request<{ cleared: boolean; pushStarted: boolean }>(
+        `/api/nodes/${id}/clear-block`,
+        { method: "POST" },
+      ),
+    probeStatus: (id: number) =>
+      request<{ status: AgentStatus; node: NodeView }>(
+        `/api/nodes/${id}/status`,
+      ),
+    getInboundNodes: (inboundId: number) =>
+      request<{ nodeIds: number[] }>(`/api/inbounds/${inboundId}/nodes`),
+    setInboundNodes: (inboundId: number, nodeIds: number[]) =>
+      request<{ nodeIds: number[] }>(`/api/inbounds/${inboundId}/nodes`, {
+        method: "PATCH",
+        body: JSON.stringify({ nodeIds }),
       }),
   },
   templates: {

@@ -23,6 +23,7 @@ import (
 	"singbox-ui/server/internal/httpx"
 	"singbox-ui/server/internal/inbounds"
 	"singbox-ui/server/internal/logs"
+	"singbox-ui/server/internal/nodes"
 	"singbox-ui/server/internal/render"
 	"singbox-ui/server/internal/settings"
 	"singbox-ui/server/internal/store"
@@ -203,6 +204,17 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	})
 	syncHandler := coresync.NewHandler(syncSvc)
 
+	// --- remote nodes (central push) -------------------------------------
+	// The poller keeps agent nodes converged (desired-hash comparison +
+	// 30s status probes); manual push-now and clear-block go through the
+	// same pusher. No business-handler changes are needed for auto-push:
+	// any panel change alters the desired hash, which the poller picks
+	// up on its next tick.
+	nodesPusher := nodes.NewPusher(st, certMgr, log, filepath.Join(cfg.dataDir, "logs"))
+	nodesSvc := nodes.NewService(st, nodesPusher)
+	nodesHandler := nodes.NewHandler(nodesSvc)
+	go nodesPusher.Start(ctx)
+
 	// --- auto-sync: debouncer + drift poll ---------------------------
 	// Two pieces, one decision point (the debouncer):
 	//   - The debouncer decides WHEN to push: 5s quiet after the
@@ -370,6 +382,7 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	settingsHandler.RegisterProtected(protected)
 	renderHandler.RegisterProtected(protected)
 	syncHandler.RegisterProtected(protected)
+	nodesHandler.RegisterProtected(protected)
 	logsHandler.RegisterProtected(protected)
 
 	subPublic := engine.Group("")

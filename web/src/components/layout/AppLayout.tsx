@@ -23,6 +23,7 @@ export type RouteKey =
   | "dashboard"
   | "subscriptions"
   | "inbounds"
+  | "nodes"
   | "certificates"
   | "settings"
   | "security"
@@ -32,6 +33,7 @@ export const ROUTES: { key: RouteKey; path: string; label: string }[] = [
   { key: "dashboard", path: "/dashboard", label: "仪表盘" },
   { key: "subscriptions", path: "/subscriptions", label: "订阅管理" },
   { key: "inbounds", path: "/inbounds", label: "入站" },
+  { key: "nodes", path: "/nodes", label: "节点" },
   { key: "certificates", path: "/certificates", label: "证书管理" },
   { key: "security", path: "/security", label: "安全和隐私" },
   { key: "settings", path: "/settings", label: "设置" },
@@ -42,6 +44,7 @@ const NAV_ICONS: Record<RouteKey, ReactNode> = {
   dashboard: <LayoutGrid className="h-[18px] w-[18px] shrink-0" />,
   subscriptions: <Users className="h-[18px] w-[18px] shrink-0" />,
   inbounds: <Server className="h-[18px] w-[18px] shrink-0" />,
+  nodes: <Share2 className="h-[18px] w-[18px] shrink-0" />,
   certificates: <ShieldCheck className="h-[18px] w-[18px] shrink-0" />,
   settings: <SettingsIcon className="h-[18px] w-[18px] shrink-0" />,
   security: <Lock className="h-[18px] w-[18px] shrink-0" />,

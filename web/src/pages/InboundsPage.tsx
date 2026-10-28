@@ -34,6 +34,7 @@ import {
   type InboundProtocol,
   type InboundStatus,
   type InboundView,
+  type NodeView,
   type RealityParams,
   type ShadowsocksParams,
   type TrojanParams,
@@ -546,6 +547,34 @@ function InboundFormDialog({
   const [formError, setFormError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // Remote node assignment: local is always included, no checkbox needed.
+  const [nodes, setNodes] = useState<NodeView[]>([]);
+  const [selectedNodes, setSelectedNodes] = useState<Set<number>>(new Set());
+  const [initialNodes, setInitialNodes] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await api.nodes.list();
+        if (cancelled) return;
+        setNodes(list);
+        if (!creating && item) {
+          const { nodeIds } = await api.nodes.getInboundNodes(item.id);
+          if (cancelled) return;
+          const s = new Set(nodeIds);
+          setSelectedNodes(s);
+          setInitialNodes(s);
+        }
+      } catch {
+        if (!cancelled) setNodes([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [creating, item]);
+
   const copyPublicKey = async () => {
     try {
       await navigator.clipboard.writeText(publicKey);
@@ -620,12 +649,28 @@ function InboundFormDialog({
     setSubmitting(true);
     try {
       const params = buildParams();
+      let inboundId: number;
       if (creating) {
-        await api.inbounds.create({ name: name.trim(), protocol, port, params });
+        const created = await api.inbounds.create({
+          name: name.trim(),
+          protocol,
+          port,
+          params,
+        });
+        inboundId = created.id;
         toast.success("入站已创建");
       } else {
         await api.inbounds.update(item.id, { name: name.trim(), port, params });
+        inboundId = item.id;
         toast.success("入站已保存");
+      }
+      const changed =
+        selectedNodes.size !== initialNodes.size ||
+        [...selectedNodes].some((id) => !initialNodes.has(id));
+      // Edit: save only when the assignment changed (empty = unassign all).
+      // Create: save only when at least one node is picked (default = local only).
+      if ((!creating && changed) || (creating && selectedNodes.size > 0)) {
+        await api.nodes.setInboundNodes(inboundId, [...selectedNodes]);
       }
       await onSaved();
     } catch (err) {
@@ -1096,6 +1141,42 @@ function InboundFormDialog({
               </p>
             </>
           )}
+
+          <div className="space-y-2">
+            <Label>远程节点</Label>
+            {nodes.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                还没有节点，先去「节点」页添加。本地始终包含，不用选。
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {nodes.map((n) => (
+                  <label
+                    key={n.id}
+                    className="flex items-center gap-2 text-sm"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedNodes.has(n.id)}
+                      onChange={(e) => {
+                        const next = new Set(selectedNodes);
+                        if (e.target.checked) {
+                          next.add(n.id);
+                        } else {
+                          next.delete(n.id);
+                        }
+                        setSelectedNodes(next);
+                      }}
+                    />
+                    {n.name}（{n.address}）
+                  </label>
+                ))}
+                <p className="text-xs text-muted-foreground">
+                  本地始终包含。勾选的节点会收到这个入站的推送，订阅里也会出现该节点的入口。
+                </p>
+              </div>
+            )}
+          </div>
 
           {formError && (
             <p className="text-[13px] text-destructive">{formError}</p>

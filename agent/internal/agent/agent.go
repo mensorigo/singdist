@@ -346,6 +346,7 @@ type Status struct {
 
 func (a *Agent) Status(ctx context.Context) Status {
 	st := Status{
+		Version:     Version,
 		LastHash:    a.state.LastHash,
 		LastSyncAt:  a.state.LastSyncAt,
 		LastResult:  a.state.LastResult,
