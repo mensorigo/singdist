@@ -17,7 +17,7 @@ import (
 // comparison and import only and never serialised to the API.
 type RunningInbound struct {
 	Tag          string `json:"tag"`
-	Type         string `json:"type"` // sing-box type: vless | hysteria2 | tuic | shadowsocks | anytls | trojan
+	Type         string `json:"type"` // sing-box type: vless | hysteria2 | tuic | anytls | trojan
 	Port         int    `json:"port"`
 	SNI          string `json:"sni,omitempty"`
 	PublicKey    string `json:"publicKey,omitempty"`
@@ -25,7 +25,6 @@ type RunningInbound struct {
 	ShortID      string `json:"shortId,omitempty"`
 	UpMbps       int    `json:"upMbps,omitempty"`
 	DownMbps     int    `json:"downMbps,omitempty"`
-	Method       string `json:"method,omitempty"` // shadowsocks
 	Congestion   string `json:"-"`                // tuic congestion_control
 	UUID         string `json:"-"`                // tuic first user
 	Password     string `json:"-"`                // first user's / inbound password, import+compare only
@@ -44,8 +43,7 @@ type coreInbound struct {
 	ListenPort int    `json:"listen_port"`
 	UpMbps     int    `json:"up_mbps"`
 	DownMbps   int    `json:"down_mbps"`
-	Method     string `json:"method"`             // shadowsocks
-	Password   string `json:"password"`           // shadowsocks server key
+	Password   string `json:"password"`           // inbound-level password
 	Congestion string `json:"congestion_control"` // tuic
 	Obfs       *struct {
 		Type     string `json:"type"`
@@ -80,14 +78,11 @@ func parseCoreInbound(in coreInbound) (RunningInbound, bool) {
 	r := RunningInbound{
 		Tag: in.Tag, Type: in.Type, Port: in.ListenPort,
 		UpMbps: in.UpMbps, DownMbps: in.DownMbps,
-		Method: in.Method, Congestion: in.Congestion,
+		Congestion: in.Congestion,
 	}
 	if in.Obfs != nil {
 		r.Obfs = in.Obfs.Type
 		r.ObfsPassword = in.Obfs.Password
-	}
-	if in.Type == "shadowsocks" {
-		r.Password = in.Password
 	}
 	if in.TLS != nil {
 		r.SNI = in.TLS.ServerName
@@ -163,8 +158,6 @@ func ProtocolOf(runningType string) string {
 		return ProtocolHysteria2
 	case "tuic":
 		return ProtocolTUIC
-	case "shadowsocks":
-		return ProtocolShadowsocks
 	case "anytls":
 		return ProtocolAnyTLS
 	case "trojan":

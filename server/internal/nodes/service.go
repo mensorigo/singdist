@@ -80,7 +80,6 @@ var protocolTransport = map[string]string{
 	"vless-reality": "tcp",
 	"hysteria2":     "udp",
 	"tuic":          "udp",
-	"shadowsocks":   "both",
 	"anytls":        "tcp",
 	"trojan":        "tcp",
 }

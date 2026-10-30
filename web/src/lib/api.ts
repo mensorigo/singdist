@@ -722,11 +722,6 @@ export interface TuicParams {
   sni: string;
 }
 
-export interface ShadowsocksParams {
-  method: string;
-  password: string;
-}
-
 export interface AnyTLSParams {
   password: string;
   sni: string;
@@ -741,7 +736,6 @@ export type InboundProtocol =
   | "vless-reality"
   | "hysteria2"
   | "tuic"
-  | "shadowsocks"
   | "anytls"
   | "trojan";
 
@@ -749,7 +743,6 @@ export type InboundParams =
   | RealityParams
   | Hy2Params
   | TuicParams
-  | ShadowsocksParams
   | AnyTLSParams
   | TrojanParams;
 

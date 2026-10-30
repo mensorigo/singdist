@@ -21,8 +21,8 @@ func TestBuildAllNodesExcludesPaused(t *testing.T) {
 	}
 	defer func() { _ = st.Close() }()
 	now := time.Now().Unix()
-	ibID, err := st.CreateInbound(ctx, "remote-ss", "shadowsocks", 18383,
-		`{"method":"aes-256-gcm","password":"pw"}`, false, now)
+	ibID, err := st.CreateInbound(ctx, "remote-at", "anytls", 18383,
+		`{"password":"pw","sni":""}`, false, now)
 	if err != nil {
 		t.Fatalf("CreateInbound: %v", err)
 	}
@@ -50,8 +50,8 @@ func TestBuildAllNodesExcludesPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAllNodes enabled: %v", err)
 	}
-	if len(nodes) != 1 || nodes[0].Name != "edge-remote-ss" {
-		t.Fatalf("enabled nodes: got %v, want one edge-remote-ss", nodes)
+	if len(nodes) != 1 || nodes[0].Name != "edge-remote-at" {
+		t.Fatalf("enabled nodes: got %v, want one edge-remote-at", nodes)
 	}
 	row, err := st.GetNode(ctx, nodeID)
 	if err != nil {

@@ -57,11 +57,11 @@ func TestCheckPortListener(t *testing.T) {
 
 func TestCheckPortManaged(t *testing.T) {
 	pVless := freePort(t)
-	pSS := freePort(t)
+	pSS := freePort(t) // trojan port below
 	pUnknown := freePort(t)
 	doc := fmt.Sprintf(`{"inbounds":[
 		{"type":"vless","tag":"m1","listen_port":%d},
-		{"type":"shadowsocks","tag":"ss1","listen_port":%d},
+		{"type":"trojan","tag":"ss1","listen_port":%d},
 		{"type":"socks","tag":"sx","listen_port":%d}
 	]}`, pVless, pSS, pUnknown)
 	target := filepath.Join(t.TempDir(), "config.json")
@@ -77,10 +77,10 @@ func TestCheckPortManaged(t *testing.T) {
 		t.Errorf("vless must not block UDP: %+v", got)
 	}
 	if got := a.CheckPort(pSS, transportTCP, "tcp"); !got.Occupied {
-		t.Errorf("ss TCP: expected occupied, got %+v", got)
+		t.Errorf("trojan TCP: expected occupied, got %+v", got)
 	}
-	if got := a.CheckPort(pSS, transportUDP, "udp"); !got.Occupied {
-		t.Errorf("ss UDP: expected occupied, got %+v", got)
+	if got := a.CheckPort(pSS, transportUDP, "udp"); got.Occupied {
+		t.Errorf("trojan must not block UDP: %+v", got)
 	}
 	if got := a.CheckPort(pUnknown, transportTCP, "tcp"); !got.Occupied {
 		t.Errorf("unknown type: expected conservative occupied, got %+v", got)

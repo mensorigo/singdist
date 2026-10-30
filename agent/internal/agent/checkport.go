@@ -14,7 +14,6 @@ var coreTypeTransports = map[string]transport{
 	"vless":       transportTCP,
 	"hysteria2":   transportUDP,
 	"tuic":        transportUDP,
-	"shadowsocks": transportTCP | transportUDP,
 	"anytls":      transportTCP,
 	"trojan":      transportTCP,
 }

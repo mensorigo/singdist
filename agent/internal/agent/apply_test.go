@@ -2,6 +2,9 @@ package agent
 
 import (
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -180,10 +183,26 @@ func testAgent(t *testing.T, engine *Engine) (*Agent, string) {
 	return ag, dir
 }
 
+func testRealityParamsForApply() realityParams {
+	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	return realityParams{
+		SNI:        "www.microsoft.com",
+		PublicKey:  base64.RawURLEncoding.EncodeToString(priv.PublicKey().Bytes()),
+		PrivateKey: base64.RawURLEncoding.EncodeToString(priv.Bytes()),
+		ShortID:    "abcd1234",
+	}
+}
+
 func ssPush(port int, method, key string) Push {
+	_ = method
+	_ = key
 	return Push{Inbounds: []Inbound{{
-		Name: "ss1", Protocol: ProtocolShadowsocks, Port: port, Enabled: true,
-		Params: rawJSON(ssParams{Method: method, Password: key}),
+		Name: "v1", Protocol: ProtocolVLESSReality, Port: port, Enabled: true,
+		Params: rawJSON(testRealityParamsForApply()),
+		Users:  []User{{Name: "s1", UUID: "11111111-1111-4111-8111-111111111111"}},
 	}}}
 }
 
@@ -294,7 +313,7 @@ func TestAgentPassthroughCheckFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	root["inbounds"] = append(docInbounds(root),
-		map[string]any{"type": "shadowsocks", "tag": "hand-bad", "method": "BAD-METHOD", "password": "x"})
+		map[string]any{"type": "trojan", "tag": "hand-bad", "method": "BAD-METHOD"})
 	raw, _ := json.Marshal(root)
 	_ = os.WriteFile(target, raw, 0o600)
 	// A changed push: merged check fails on BAD-METHOD, desired-only

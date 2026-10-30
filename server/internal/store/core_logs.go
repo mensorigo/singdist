@@ -224,7 +224,7 @@ func (s *Store) RecentConnections(ctx context.Context, sinceMs int64) (map[strin
 // with a connection record at or after sinceMs. Source is "ip:port"
 // (Go Addr.String form, so IPv6 arrives bracketed); the port is
 // stripped, and an unparseable source counts as-is rather than being
-// dropped. Rows with an empty user (e.g. shadowsocks, which has no
+// dropped. Rows with an empty user (e.g. protocols with no
 // per-user field) cannot be attributed and are skipped.
 func (s *Store) OnlineIPs(ctx context.Context, sinceMs int64) (map[string]map[string]struct{}, error) {
 	rows, err := s.db.QueryContext(ctx,

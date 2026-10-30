@@ -281,7 +281,7 @@ func getFieldPath(obj map[string]any, path string) (any, bool) {
 func panelProtocol(fileIb map[string]any) (string, bool) {
 	t := asString(fileIb["type"])
 	switch t {
-	case "hysteria2", "tuic", "shadowsocks", "anytls", "trojan":
+	case "hysteria2", "tuic", "anytls", "trojan":
 		return t, true
 	case "vless":
 		tls, _ := asMap(fileIb["tls"])
@@ -451,9 +451,6 @@ func mappedParams(protocol string, fileIb map[string]any) (map[string]any, []str
 				unmapped["tls."+k] = deepCopyJSON(v)
 			}
 		}
-	case "shadowsocks":
-		out["method"] = asString(fileIb["method"])
-		out["password"] = asString(fileIb["password"])
 	case "anytls", "trojan":
 		out["sni"] = asString(tls["server_name"])
 		for k, v := range tls {

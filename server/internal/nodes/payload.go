@@ -104,10 +104,12 @@ func BuildPush(ctx context.Context, st *store.Store, certMgr *certs.Manager, nod
 			switch ib.Protocol {
 			case "vless-reality", "tuic":
 				users = append(users, PushUser{Name: sub.Name, UUID: sub.UUID})
-			case "hysteria2", "anytls", "trojan":
+			case "hysteria2", "anytls":
 				users = append(users, PushUser{Name: sub.Name})
-			case "shadowsocks":
-				// No per-sub users; traffic is unattributable.
+			case "trojan":
+				// Trojan users need the UUID so the agent can
+				// derive the same per-subscription password.
+				users = append(users, PushUser{Name: sub.Name, UUID: sub.UUID})
 			default:
 				// Unknown protocol: still pushed (the agent
 				// rejects it loudly); users mirror vless.

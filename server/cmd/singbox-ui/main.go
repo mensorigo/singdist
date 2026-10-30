@@ -222,7 +222,27 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	// file in the data dir, not a new table.
 	localTraffic := traffic.New(cfg.clashAPI, st, filepath.Join(cfg.dataDir, "traffic.json"))
 	go localTraffic.Run(ctx)
-	trafficHandler := traffic.NewHandler(traffic.NewSummaryService(st, nodesSvc, localTraffic))
+	trafficSummary := traffic.NewSummaryService(st, nodesSvc, localTraffic)
+	trafficHandler := traffic.NewHandler(trafficSummary)
+	// Usage sync: every 30s, write the collector's per-subscription
+	// totals into the subscriptions table. Without this the
+	// subscription page and the client userinfo header read
+	// used_up/used_down, which nothing else ever writes, so they
+	// stay zero no matter how much traffic flows.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := trafficSummary.SyncUsage(ctx); err != nil {
+					slog.Warn("traffic usage sync failed", "error", err)
+				}
+			}
+		}
+	}()
 
 	// --- auto-sync: debouncer + drift poll ---------------------------
 	// Two pieces, one decision point (the debouncer):

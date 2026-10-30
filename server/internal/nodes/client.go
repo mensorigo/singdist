@@ -21,8 +21,10 @@ import (
 
 // --- agent API mirrors (the contract; field names must match the agent) ---
 
-// PushUser is one agent inbound user. vless/tuic carry Name+UUID;
-// password protocols carry Name only; shadowsocks ignores users.
+// PushUser is one agent inbound user. vless/tuic/trojan carry
+// Name+UUID (trojan needs the UUID to derive its per-subscription
+// password); other password protocols carry Name only;
+
 type PushUser struct {
 	Name string `json:"name"`
 	UUID string `json:"uuid,omitempty"`

@@ -30,10 +30,10 @@ func seedPayloadStore(t *testing.T) (*store.Store, *certs.Manager, store.NodeRow
 	if err != nil {
 		t.Fatalf("CreateInbound vless: %v", err)
 	}
-	ssID, err := st.CreateInbound(ctx, "ss1", "shadowsocks", 8388,
-		`{"method":"2022-blake3-aes-128-gcm","password":"pw"}`, true, now)
+	ssID, err := st.CreateInbound(ctx, "tj1", "trojan", 8443,
+		`{"password":"pw","sni":""}`, true, now)
 	if err != nil {
-		t.Fatalf("CreateInbound ss: %v", err)
+		t.Fatalf("CreateInbound trojan: %v", err)
 	}
 	tplID, err := st.CreateTemplate(ctx, "all", `[`+strconv.FormatInt(vlessID, 10)+`,`+strconv.FormatInt(ssID, 10)+`]`, "", now)
 	if err != nil {
@@ -68,6 +68,9 @@ func seedPayloadStore(t *testing.T) (*store.Store, *certs.Manager, store.NodeRow
 func TestBuildPushUsersAndHash(t *testing.T) {
 	ctx := context.Background()
 	st, cm, node, _, _ := seedPayloadStore(t)
+	if _, err := cm.GenerateSelfSigned([]string{"node.example.com"}, 365, "test", true); err != nil {
+		t.Fatalf("GenerateSelfSigned: %v", err)
+	}
 
 	p1, h1, err := BuildPush(ctx, st, cm, node)
 	if err != nil {
@@ -79,16 +82,17 @@ func TestBuildPushUsersAndHash(t *testing.T) {
 	if p1.PublicHost != "node.example.com" {
 		t.Fatalf("BuildPush publicHost: got %q, want node.example.com", p1.PublicHost)
 	}
-	if p1.Cert != nil {
-		t.Fatalf("BuildPush cert: got non-nil, want nil (no TLS-cert inbound)")
+	if p1.Cert == nil || p1.Cert.Certificate == "" {
+		t.Fatalf("BuildPush cert: got nil, want embedded cert (trojan inbound)")
 	}
-	// vless carries the subscription user; shadowsocks carries none.
+	// vless carries the subscription user; trojan carries it too,
+	// with the UUID the agent needs to derive its password.
 	var vless, ss *PushInbound
 	for i := range p1.Inbounds {
 		switch p1.Inbounds[i].Name {
 		case "v1":
 			vless = &p1.Inbounds[i]
-		case "ss1":
+		case "tj1":
 			ss = &p1.Inbounds[i]
 		}
 	}
@@ -99,8 +103,9 @@ func TestBuildPushUsersAndHash(t *testing.T) {
 		vless.Users[0].UUID != "11111111-2222-3333-4444-555555555555" {
 		t.Fatalf("vless users: got %+v, want [{sub1 uuid}]", vless.Users)
 	}
-	if len(ss.Users) != 0 {
-		t.Fatalf("ss users: got %+v, want none", ss.Users)
+	if len(ss.Users) != 1 || ss.Users[0].Name != "sub1" ||
+		ss.Users[0].UUID != "11111111-2222-3333-4444-555555555555" {
+		t.Fatalf("trojan users: got %+v, want [{sub1 uuid}]", ss.Users)
 	}
 
 	// Hash stability: same state -> same hash.
@@ -116,10 +121,13 @@ func TestBuildPushUsersAndHash(t *testing.T) {
 func TestBuildPushUnassignedAndDisabled(t *testing.T) {
 	ctx := context.Background()
 	st, cm, node, vlessID, _ := seedPayloadStore(t)
+	if _, err := cm.GenerateSelfSigned([]string{"node.example.com"}, 365, "test", true); err != nil {
+		t.Fatalf("GenerateSelfSigned: %v", err)
+	}
 	now := int64(1700000000)
 
 	// An unassigned inbound must not appear in the payload.
-	if _, err := st.CreateInbound(ctx, "orphan", "trojan", 8443,
+	if _, err := st.CreateInbound(ctx, "orphan", "trojan", 8444,
 		`{"password":"pw","sni":""}`, true, now); err != nil {
 		t.Fatalf("CreateInbound orphan: %v", err)
 	}
@@ -162,8 +170,8 @@ func TestBuildPushUnassignedAndDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildPush after unassign: %v", err)
 	}
-	if len(p.Inbounds) != 1 || p.Inbounds[0].Name != "ss1" {
-		t.Fatalf("BuildPush after unassign: got %+v, want only ss1", p.Inbounds)
+	if len(p.Inbounds) != 1 || p.Inbounds[0].Name != "tj1" {
+		t.Fatalf("BuildPush after unassign: got %+v, want only tj1", p.Inbounds)
 	}
 }
 
@@ -205,6 +213,9 @@ func TestBuildPushCertRequired(t *testing.T) {
 func TestBuildPushNodePortOverride(t *testing.T) {
 	ctx := context.Background()
 	st, cm, node, vlessID, ssID := seedPayloadStore(t)
+	if _, err := cm.GenerateSelfSigned([]string{"node.example.com"}, 365, "test", true); err != nil {
+		t.Fatalf("GenerateSelfSigned: %v", err)
+	}
 
 	_, h0, err := BuildPush(ctx, st, cm, node)
 	if err != nil {
@@ -228,8 +239,8 @@ func TestBuildPushNodePortOverride(t *testing.T) {
 	if byName["v1"].Port != 8443 {
 		t.Fatalf("BuildPush v1 port: got %d, want 8443 (override)", byName["v1"].Port)
 	}
-	if byName["ss1"].Port != 8388 {
-		t.Fatalf("BuildPush ss1 port: got %d, want 8388 (no override)", byName["ss1"].Port)
+	if byName["tj1"].Port != 8443 {
+		t.Fatalf("BuildPush tj1 port: got %d, want 8443 (no override)", byName["ss1"].Port)
 	}
 	// Back to port 0: the inbound's own port returns.
 	if err := st.SetInboundNodes(ctx, vlessID, []store.InboundAssignment{{NodeID: node.ID, Port: 0}}); err != nil {

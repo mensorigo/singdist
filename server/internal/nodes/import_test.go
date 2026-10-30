@@ -32,8 +32,8 @@ func seedImportStore(t *testing.T) (*store.Store, int64) {
 	}
 	// ss2: local only (NOT assigned to the node) — a name conflict
 	// target for import candidates.
-	if _, err := st.CreateInbound(ctx, "ss2", "shadowsocks", 18353,
-		`{"method":"2022-blake3-aes-128-gcm","password":"cHcAAAAAAAAAAAAAAAAAAAAAA=="}`, true, now); err != nil {
+	if _, err := st.CreateInbound(ctx, "ss2", "trojan", 18353,
+		`{"password":"pw","sni":""}`, true, now); err != nil {
 		t.Fatalf("CreateInbound ss2: %v", err)
 	}
 	nodeID, err := st.CreateNode(ctx, store.NodeRow{
@@ -75,9 +75,9 @@ func importTestCore(t *testing.T) []json.RawMessage {
 		  "users":[{"name":"u","password":"pw"}]}`,
 		// Unsupported type: dropped silently, never listed.
 		`{"type":"vmess","tag":"old-vmess","listen_port":18361}`,
-		// 2022 key of the wrong length: disabled by params validation.
-		`{"type":"shadowsocks","tag":"bad-ss","listen_port":18370,
-		  "method":"2022-blake3-aes-128-gcm","password":"short"}`,
+		// Trojan with an empty-password user: disabled by params validation.
+		`{"type":"trojan","tag":"bad-tj","listen_port":18370,
+		  "users":[{"name":"u","password":""}]}`,
 		// Two TCP inbounds on one port: first wins, second disabled.
 		`{"type":"anytls","tag":"at1","listen_port":18371,
 		  "users":[{"name":"u","password":"pw"}]}`,
@@ -170,7 +170,7 @@ func TestScanCandidatesClassification(t *testing.T) {
 	for name, want := range map[string]string{
 		"ss2":        "名称已被入站",
 		"clash-port": "已被该节点上的入站",
-		"bad-ss":     "key must be",
+		"bad-tj":     "password is required",
 		"tj1":        "端口冲突",
 		"resv":       "保留端口",
 	} {

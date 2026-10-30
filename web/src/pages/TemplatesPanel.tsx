@@ -33,7 +33,6 @@ const PROTOCOL_LABEL: Record<string, string> = {
   "vless-reality": "VLESS · Reality",
   hysteria2: "Hysteria2",
   tuic: "TUIC v5",
-  shadowsocks: "Shadowsocks",
   anytls: "AnyTLS",
   trojan: "Trojan",
 };

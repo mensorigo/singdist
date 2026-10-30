@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -64,6 +65,17 @@ func generate(desired []Inbound, publicHost string, cert *Cert, logPath, clashAd
 // panel's helper; the two modules cannot import each other.
 func coreUserName(subName, inboundName string) string {
 	return subName + "-" + inboundName
+}
+
+// trojanPassword mirrors the panel's trojanpass package exactly:
+// HMAC-SHA256 keyed by the inbound base password over the
+// subscription UUID, first 32 hex chars. The two modules cannot
+// import each other; keep both in sync or node trojan passwords
+// will disagree with the panel's rendered subscriptions.
+func trojanPassword(basePassword, subscriptionUUID string) string {
+	mac := hmac.New(sha256.New, []byte(basePassword))
+	mac.Write([]byte(subscriptionUUID))
+	return hex.EncodeToString(mac.Sum(nil))[:32]
 }
 
 func genInbound(ib Inbound, publicHost string, cert *Cert) (map[string]any, error) {
@@ -150,12 +162,6 @@ func genInbound(ib Inbound, publicHost string, cert *Cert) (map[string]any, erro
 		}
 		base["congestion_control"] = congestion
 		base["tls"] = tlsCert(p.SNI, []string{"h3"})
-	case ProtocolShadowsocks:
-		var p ssParams
-		_ = json.Unmarshal(ib.Params, &p)
-		base["type"] = "shadowsocks"
-		base["method"] = p.Method
-		base["password"] = p.Password
 	case ProtocolAnyTLS:
 		var p passwordSNIParams
 		_ = json.Unmarshal(ib.Params, &p)
@@ -167,13 +173,16 @@ func genInbound(ib Inbound, publicHost string, cert *Cert) (map[string]any, erro
 		_ = json.Unmarshal(ib.Params, &p)
 		base["type"] = "trojan"
 		// Mirrors the panel: trojan identifies users by
-		// password, so one user per inbound, named after the
-		// inbound, when at least one pushed user exists.
-		if len(ib.Users) > 0 {
-			base["users"] = []any{map[string]any{"name": ib.Name, "password": p.Password}}
-		} else {
-			base["users"] = []any{}
+		// password, so each pushed subscription gets its own
+		// derived password (trojanPassword) under its
+		// per-subscription user name. Distinct passwords pass
+		// the core check and let traffic be attributed per
+		// subscription. Pushed users carry their UUID for this.
+		users := []any{}
+		for _, u := range ib.Users {
+			users = append(users, map[string]any{"name": coreUserName(u.Name, ib.Name), "password": trojanPassword(p.Password, u.UUID)})
 		}
+		base["users"] = users
 		base["tls"] = tlsCert(p.SNI, nil)
 	default:
 		// Validation rejects unknown protocols before generation,

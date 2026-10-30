@@ -578,7 +578,10 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 	// Password uniformity (password protocols) and flow uniformity
 	// (vless): panel values win; divergent per-user overrides are
 	// dropped by regen (see the helpers).
-	if row.Protocol == "hysteria2" || row.Protocol == "tuic" || row.Protocol == "anytls" || row.Protocol == "trojan" {
+	// Trojan is excluded: its per-subscription passwords are
+	// deliberately non-uniform, so uniformity would falsely
+	// flag every trojan sync as a revert.
+	if row.Protocol == "hysteria2" || row.Protocol == "tuic" || row.Protocol == "anytls" {
 		passwordUniformity(tag, fileUsers, oldUsers, row, res)
 	}
 	if row.Protocol == "vless-reality" {
@@ -598,11 +601,10 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 			}
 		}
 		if row.Protocol == "trojan" && name == tag {
-			// Trojan's single core user (named after the
-			// inbound, see generate.go) is panel-owned, not
-			// a stranger: regen writes it, so it is never
-			// passthrough-appended. Password changes are
-			// already covered by passwordUniformity above.
+			// Legacy trojan single core user (named after
+			// the inbound, pre per-subscription passwords)
+			// is panel-owned, not a stranger: regen drops
+			// it, so it is never passthrough-appended.
 			if bu == nil {
 				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "]", detail: "与面板订阅同名，恢复面板值（文件用户不保留）"})
 			}

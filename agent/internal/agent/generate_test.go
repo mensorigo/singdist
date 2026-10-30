@@ -84,10 +84,10 @@ func TestGenerateVLESSRealityShape(t *testing.T) {
 }
 
 func TestGenerateSkipsDisabledAndUnknown(t *testing.T) {
-	off := Inbound{Name: "off", Protocol: ProtocolShadowsocks, Port: 9001, Enabled: false,
-		Params: mustJSON(t, ssParams{Method: "aes-256-gcm", Password: "pw"})}
-	on := Inbound{Name: "on", Protocol: ProtocolShadowsocks, Port: 9002, Enabled: true,
-		Params: mustJSON(t, ssParams{Method: "aes-256-gcm", Password: "pw"})}
+	off := Inbound{Name: "off", Protocol: ProtocolVLESSReality, Port: 9001, Enabled: false,
+		Params: mustJSON(t, testRealityParams(t))}
+	on := Inbound{Name: "on", Protocol: ProtocolVLESSReality, Port: 9002, Enabled: true,
+		Params: mustJSON(t, testRealityParams(t)), Users: []User{{Name: "s1", UUID: "11111111-1111-4111-8111-111111111111"}}}
 	doc, _, err := generate([]Inbound{off, on}, "", nil, "", "")
 	if err != nil {
 		t.Fatal(err)

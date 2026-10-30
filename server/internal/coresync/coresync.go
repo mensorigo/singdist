@@ -766,8 +766,7 @@ func (s *Service) inboundPortMatches(ctx context.Context, id int64, port int) bo
 }
 
 // inboundParamsMatch checks the intended params are a subset of the
-// stored params, with one tolerance: an intended empty shadowsocks
-// method normalizes to the panel default on save.
+// stored params; see inboundParamsMatch for its tolerances.
 func (s *Service) inboundParamsMatch(ctx context.Context, id int64, intended string) bool {
 	row := s.inboundRow(ctx, id)
 	if row == nil {

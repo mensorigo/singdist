@@ -15,7 +15,7 @@
 // central panel and the agent would disagree on the secret and the
 // subscription rendered from the central record would be wrong.
 // Deterministic defaults that are not secrets (flow, congestion,
-// shadowsocks method) are still applied, exactly like the panel.
+// panel.
 package agent
 
 import (
@@ -31,7 +31,6 @@ const (
 	ProtocolVLESSReality = "vless-reality"
 	ProtocolHysteria2    = "hysteria2"
 	ProtocolTUIC         = "tuic"
-	ProtocolShadowsocks  = "shadowsocks"
 	ProtocolAnyTLS       = "anytls"
 	ProtocolTrojan       = "trojan"
 )
@@ -61,15 +60,15 @@ var protocolTransports = map[string]transport{
 	ProtocolVLESSReality: transportTCP,
 	ProtocolHysteria2:    transportUDP,
 	ProtocolTUIC:         transportUDP,
-	ProtocolShadowsocks:  transportTCP | transportUDP,
 	ProtocolAnyTLS:       transportTCP,
 	ProtocolTrojan:       transportTCP,
 }
 
 // User is one core user attached to an inbound. For vless-reality
-// and tuic the uuid is the credential; for hysteria2/anytls/trojan
-// the password is inbound-level and shared, so only the name is
-// used; shadowsocks has no per-user list at all.
+// and tuic the uuid is the credential; for hysteria2/anytls the
+// password is inbound-level and shared, so only the name is used;
+// trojan carries the uuid too, so the agent can derive that
+// subscription's password.
 type User struct {
 	Name string `json:"name"`
 	UUID string `json:"uuid,omitempty"`
@@ -140,21 +139,12 @@ type tuicParams struct {
 	SNI               string `json:"sni"`
 }
 
-type ssParams struct {
-	Method   string `json:"method"`
-	Password string `json:"password"`
-}
 
 type passwordSNIParams struct {
 	Password string `json:"password"`
 	SNI      string `json:"sni"`
 }
 
-var ss2022KeyLen = map[string]int{
-	"2022-blake3-aes-128-gcm":       16,
-	"2022-blake3-aes-256-gcm":       32,
-	"2022-blake3-chacha20-poly1305": 32,
-}
 
 func validUUID(s string) bool {
 	if len(s) != 36 {
@@ -270,33 +260,6 @@ func validateParams(protocol string, raw json.RawMessage) (json.RawMessage, erro
 		}
 		b, _ := json.Marshal(p)
 		return b, nil
-	case ProtocolShadowsocks:
-		var p ssParams
-		if len(raw) > 0 {
-			if err := json.Unmarshal(raw, &p); err != nil {
-				return nil, errValidation("invalid shadowsocks params")
-			}
-		}
-		if p.Method == "" {
-			p.Method = "2022-blake3-aes-128-gcm"
-		}
-		if keyLen, is2022 := ss2022KeyLen[p.Method]; is2022 {
-			b, err := decodeSSKey(p.Password)
-			if err != nil || len(b) != keyLen {
-				return nil, errValidation(fmt.Sprintf(
-					"shadowsocks %s key must be a %d-byte base64 value", p.Method, keyLen))
-			}
-			out, _ := json.Marshal(p)
-			return out, nil
-		}
-		// Any other method string is stored verbatim (tier 2); the
-		// core's own check at apply time is the final validator
-		// for a bogus value (tier 3).
-		if p.Password == "" {
-			return nil, errValidation("shadowsocks password is required")
-		}
-		out, _ := json.Marshal(p)
-		return out, nil
 	case ProtocolAnyTLS, ProtocolTrojan:
 		var p passwordSNIParams
 		if len(raw) > 0 {
@@ -324,12 +287,6 @@ func mustDecode(s string) []byte {
 	return b
 }
 
-func decodeSSKey(s string) ([]byte, error) {
-	if b, err := base64.StdEncoding.DecodeString(s); err == nil {
-		return b, nil
-	}
-	return base64.RawStdEncoding.DecodeString(s)
-}
 
 // --- inbound set validation -----------------------------------------------
 
@@ -365,8 +322,7 @@ func validateInbounds(in []Inbound, reserved map[int]string) ([]Inbound, error) 
 			return nil, err
 		}
 		// Users: vless-reality and tuic carry uuid credentials;
-		// password protocols only need names; shadowsocks ignores
-		// users entirely.
+		// password protocols only need names.
 		switch ib.Protocol {
 		case ProtocolVLESSReality, ProtocolTUIC:
 			for _, u := range ib.Users {
@@ -377,7 +333,6 @@ func validateInbounds(in []Inbound, reserved map[int]string) ([]Inbound, error) 
 					return nil, errValidation("user uuid must be a valid UUID")
 				}
 			}
-		case ProtocolShadowsocks:
 		default:
 			for _, u := range ib.Users {
 				if strings.TrimSpace(u.Name) == "" {

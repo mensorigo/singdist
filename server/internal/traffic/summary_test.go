@@ -32,6 +32,61 @@ func TestSummaryMapsVlessUserToSubscription(t *testing.T) {
 		t.Fatalf("hy2 test-hy2 -> %q, want test", got)
 	}
 	if got := coreUserToSubscription("trojan", "trojan", "trojan", subs); got != "" {
-		t.Fatalf("trojan single -> %q, want empty (shared)", got)
+		t.Fatalf("trojan single -> %q, want empty (legacy shared)", got)
+	}
+	if got := coreUserToSubscription("test-trojan", "trojan", "trojan", subs); got != "test" {
+		t.Fatalf("trojan test-trojan -> %q, want test", got)
+	}
+}
+
+func TestSyncUsageWritesCollectorTotals(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := int64(1700000000)
+	if _, err := st.CreateInbound(ctx, "vless-reality", "vless-reality", 443,
+		`{"sni":"example.com","publicKey":"k","privateKey":"p","shortId":"","flow":""}`, true, now); err != nil {
+		t.Fatal(err)
+	}
+	tplID, err := st.CreateTemplate(ctx, "tpl", "[1]", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subID, err := st.CreateSubscription(ctx, store.SubscriptionRow{
+		Name: "test", UUID: "11111111-2222-3333-4444-555555555555",
+		Token: "tok", TemplateID: tplID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := New("http://127.0.0.1:9", st, "")
+	c.byKey["vless-reality\x00test"] = &Entry{Inbound: "vless-reality", User: "test", Up: 100, Down: 200}
+	c.byInb["vless-reality"] = &Entry{Inbound: "vless-reality", Up: 100, Down: 200}
+	svc := NewSummaryService(st, nodes.NewService(st, nil), c)
+	n, err := svc.SyncUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("SyncUsage updated %d, want 1", n)
+	}
+	row, err := st.GetSubscription(ctx, subID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.UsedUp != 100 || row.UsedDown != 200 {
+		t.Fatalf("usage = %d/%d, want 100/200", row.UsedUp, row.UsedDown)
+	}
+	// Second run with unchanged totals writes nothing.
+	n, err = svc.SyncUsage(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("SyncUsage second run updated %d, want 0", n)
 	}
 }

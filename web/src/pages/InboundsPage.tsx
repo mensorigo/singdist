@@ -25,9 +25,7 @@ import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -46,7 +44,6 @@ import {
   type LocalMachine,
   type NodeView,
   type RealityParams,
-  type ShadowsocksParams,
   type TrojanParams,
   type TuicParams,
 } from "@/lib/api";
@@ -134,7 +131,6 @@ const PROTOCOL_LABEL: Record<InboundProtocol, string> = {
   "vless-reality": "VLESS · Reality",
   hysteria2: "Hysteria2",
   tuic: "TUIC v5",
-  shadowsocks: "Shadowsocks",
   anytls: "AnyTLS",
   trojan: "Trojan",
 };
@@ -144,7 +140,6 @@ const PROTOCOL_TRANSPORT: Record<InboundProtocol, string> = {
   "vless-reality": "TCP",
   hysteria2: "UDP",
   tuic: "UDP",
-  shadowsocks: "TCP+UDP",
   anytls: "TCP",
   trojan: "TCP",
 };
@@ -160,42 +155,17 @@ const DEFAULT_PORT: Record<InboundProtocol, number> = {
   "vless-reality": 443,
   hysteria2: 8443,
   tuic: 443,
-  shadowsocks: 8388,
   anytls: 8443,
   trojan: 443,
 };
 
-// Key lengths for the Shadowsocks 2022 methods; other methods take a
-// free-form password.
-const SS2022_KEY_LEN: Record<string, number> = {
-  "2022-blake3-aes-128-gcm": 16,
-  "2022-blake3-aes-256-gcm": 32,
-  "2022-blake3-chacha20-poly1305": 32,
-};
 
 // Fixed option values for the form's Select dropdowns. These must match
 // the SelectItem values rendered below; customSelectOption uses them
 // only to decide whether the current value needs a temporary option.
 const OBFS_OPTIONS = ["none", "salamander"] as const;
 const TUIC_CONGESTION_OPTIONS = ["bbr", "cubic", "new_reno"] as const;
-const SS_METHOD_OPTIONS = [
-  "2022-blake3-aes-128-gcm",
-  "2022-blake3-aes-256-gcm",
-  "2022-blake3-chacha20-poly1305",
-  "aes-128-gcm",
-  "aes-256-gcm",
-  "chacha20-ietf-poly1305",
-] as const;
 
-function randomBase64(bytes: number): string {
-  const a = new Uint8Array(bytes);
-  crypto.getRandomValues(a);
-  let s = "";
-  a.forEach((b) => {
-    s += String.fromCharCode(b);
-  });
-  return btoa(s);
-}
 
 function shortVal(field: InboundDiff["field"], v: string): string {
   if (field === "publicKey" && v.length > 14) return `${v.slice(0, 10)}…`;
@@ -634,14 +604,6 @@ function InboundFormDialog({
   );
   const [tuicSni, setTuicSni] = useState(tp?.sni ?? "");
 
-  const sp =
-    item?.protocol === "shadowsocks"
-      ? (item.params as ShadowsocksParams)
-      : null;
-  const [ssMethod, setSsMethod] = useState(
-    sp?.method ?? "2022-blake3-aes-128-gcm",
-  );
-  const [ssPassword, setSsPassword] = useState(sp?.password ?? "");
 
   // Temporary dropdown options for values outside the fixed lists (e.g.
   // imported from a config file): shown while current, gone once the
@@ -654,7 +616,6 @@ function InboundFormDialog({
     TUIC_CONGESTION_OPTIONS,
     tuicCongestion,
   );
-  const ssMethodCustom = customSelectOption(SS_METHOD_OPTIONS, ssMethod);
 
   const ap = item?.protocol === "anytls" ? (item.params as AnyTLSParams) : null;
   const [alPassword, setAlPassword] = useState(ap?.password ?? "");
@@ -776,11 +737,6 @@ function InboundFormDialog({
           congestionControl: tuicCongestion,
           sni: tuicSni.trim(),
         } as TuicParams;
-      case "shadowsocks":
-        return {
-          method: ssMethod,
-          password: ssPassword.trim(),
-        } as ShadowsocksParams;
       case "anytls":
         return {
           password: alPassword.trim(),
@@ -1218,80 +1174,6 @@ function InboundFormDialog({
               <p className="text-xs text-muted-foreground">
                 服务器证书将使用「证书管理」中的当前证书（同步阶段生效）。
               </p>
-            </>
-          )}
-          {protocol === "shadowsocks" && (
-            <>
-              <div className="space-y-2">
-                <Label htmlFor="inb-ssm">加密方法</Label>
-                <Select value={ssMethod} onValueChange={setSsMethod}>
-                  <SelectTrigger id="inb-ssm">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectLabel>2022 系列（推荐）</SelectLabel>
-                      <SelectItem value="2022-blake3-aes-128-gcm">
-                        2022-blake3-aes-128-gcm
-                      </SelectItem>
-                      <SelectItem value="2022-blake3-aes-256-gcm">
-                        2022-blake3-aes-256-gcm
-                      </SelectItem>
-                      <SelectItem value="2022-blake3-chacha20-poly1305">
-                        2022-blake3-chacha20-poly1305
-                      </SelectItem>
-                    </SelectGroup>
-                    <SelectGroup>
-                      <SelectLabel>经典系列</SelectLabel>
-                      <SelectItem value="aes-128-gcm">aes-128-gcm</SelectItem>
-                      <SelectItem value="aes-256-gcm">aes-256-gcm</SelectItem>
-                      <SelectItem value="chacha20-ietf-poly1305">
-                        chacha20-ietf-poly1305
-                      </SelectItem>
-                    </SelectGroup>
-                    {/* Temporary option for a method outside the fixed
-                    lists, same as obfs/tuic above. */}
-                    {ssMethodCustom && (
-                      <SelectItem value={ssMethodCustom.value}>
-                        {ssMethodCustom.label}
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="inb-sspw">
-                    {SS2022_KEY_LEN[ssMethod] ? "密钥" : "密码"}
-                  </Label>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      setSsPassword(
-                        SS2022_KEY_LEN[ssMethod]
-                          ? randomBase64(SS2022_KEY_LEN[ssMethod])
-                          : randomHex(8),
-                      )
-                    }
-                    className="h-7 rounded-lg px-2 text-xs"
-                  >
-                    随机生成
-                  </Button>
-                </div>
-                <SecretInput
-                  id="inb-sspw"
-                  value={ssPassword}
-                  onChange={setSsPassword}
-                  placeholder="留空则创建时自动生成"
-                />
-                {SS2022_KEY_LEN[ssMethod] && (
-                  <p className="text-xs text-muted-foreground">
-                    2022 系列的密钥是定长（{SS2022_KEY_LEN[ssMethod]}{" "}
-                    字节）的 base64 值，长度不对会被拒绝。
-                  </p>
-                )}
-              </div>
             </>
           )}
           {protocol === "anytls" && (

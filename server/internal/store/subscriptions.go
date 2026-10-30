@@ -114,6 +114,16 @@ func (s *Store) SetSubscriptionEnabled(ctx context.Context, id int64, enabled bo
 	return n > 0, err
 }
 
+// UpdateSubscriptionUsage writes the collector's per-subscription
+// totals (actual client traffic through that subscription, local +
+// node, never NIC totals or unassigned bytes). It touches only the
+// usage columns so the 30s usage sync does not churn updated_at.
+func (s *Store) UpdateSubscriptionUsage(ctx context.Context, id, up, down int64) error {
+	_, err := s.db.ExecContext(ctx,
+		`UPDATE subscriptions SET used_up = ?, used_down = ? WHERE id = ?`, up, down, id)
+	return err
+}
+
 // UpdateSubscriptionToken rotates the distribution token (link reset).
 func (s *Store) UpdateSubscriptionToken(ctx context.Context, id int64, token string, now int64) error {
 	_, err := s.db.ExecContext(ctx,

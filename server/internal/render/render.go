@@ -16,6 +16,7 @@ import (
 
 	"singbox-ui/server/internal/settings"
 	"singbox-ui/server/internal/store"
+	"singbox-ui/server/internal/trojanpass"
 )
 
 // Error mirrors the other modules' typed API failure.
@@ -70,7 +71,7 @@ type Node struct {
 	PublicKey string
 	ShortID   string
 
-	// password protocols (hysteria2, tuic, shadowsocks, anytls, trojan)
+	// password protocols (hysteria2, tuic, anytls, trojan)
 	Password string
 
 	// hysteria2
@@ -82,8 +83,6 @@ type Node struct {
 	// tuic
 	Congestion string
 
-	// shadowsocks
-	Method string
 }
 
 // Local mirrors of the inbound params JSON (the params blob is the
@@ -107,11 +106,6 @@ type tuicParams struct {
 	Password          string `json:"password"`
 	CongestionControl string `json:"congestionControl"`
 	SNI               string `json:"sni"`
-}
-
-type ssParams struct {
-	Method   string `json:"method"`
-	Password string `json:"password"`
 }
 
 type passwordSNIParams struct {
@@ -258,15 +252,15 @@ func nodeForInbound(ib store.InboundRow, sub store.SubscriptionRow, host string,
 			n.Congestion = "bbr"
 		}
 		n.SNI = p.SNI
-	case "shadowsocks":
-		var p ssParams
-		_ = json.Unmarshal([]byte(ib.Params), &p)
-		n.Method = p.Method
-		n.Password = p.Password
-	case "anytls", "trojan":
+	case "anytls":
 		var p passwordSNIParams
 		_ = json.Unmarshal([]byte(ib.Params), &p)
 		n.Password = p.Password
+		n.SNI = p.SNI
+	case "trojan":
+		var p passwordSNIParams
+		_ = json.Unmarshal([]byte(ib.Params), &p)
+		n.Password = trojanpass.Password(p.Password, sub.UUID)
 		n.SNI = p.SNI
 	default:
 		return Node{}, false

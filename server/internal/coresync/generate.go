@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"singbox-ui/server/internal/store"
+	"singbox-ui/server/internal/trojanpass"
 )
 
 // activeSubscriptions returns the subscriptions that currently grant
@@ -50,11 +51,6 @@ type tuicParams struct {
 	Password          string `json:"password"`
 	CongestionControl string `json:"congestionControl"`
 	SNI               string `json:"sni"`
-}
-
-type ssParams struct {
-	Method   string `json:"method"`
-	Password string `json:"password"`
 }
 
 type passwordSNIParams struct {
@@ -177,10 +173,13 @@ func (s *Service) Generate(ctx context.Context) (doc []byte, hash string, err er
 // unchanged; clients of password protocols send only the password,
 // never this name. vless keeps the plain subscription name because
 // its identity is the UUID, which is already identical everywhere.
-// Trojan is the exception: it identifies users by password, so it
-// gets a single user per inbound (see the trojan case below), not
-// one per subscription; coreUserName for trojan is legacy only
-// (classify still recognises old renamed trojan users on transition).
+// Trojan used to be the exception (one shared user per inbound),
+// but it now gets one user per subscription like the other password
+// protocols: each subscription's password is derived from the
+// inbound base password and its UUID (see trojanpass), so Trojan
+// traffic can be attributed per subscription. The old single user
+// named after the inbound is legacy only (classify still recognises
+// it on transition so it is dropped, never passthrough-appended).
 // The agent mirrors this rule in its own generate.go; keep them
 // in sync. (Hyphenated names could theoretically collide across
 // (sub, inbound) pairs, e.g. sub "a-b" + inbound "c" vs sub "a" +
@@ -275,12 +274,6 @@ func (s *Service) genInbound(ib store.InboundRow, subs []store.SubscriptionRow, 
 		}
 		base["congestion_control"] = congestion
 		base["tls"] = tlsCert(p.SNI, []string{"h3"})
-	case "shadowsocks":
-		var p ssParams
-		_ = json.Unmarshal([]byte(ib.Params), &p)
-		base["type"] = "shadowsocks"
-		base["method"] = p.Method
-		base["password"] = p.Password
 	case "anytls":
 		var p passwordSNIParams
 		_ = json.Unmarshal([]byte(ib.Params), &p)
@@ -291,20 +284,19 @@ func (s *Service) genInbound(ib store.InboundRow, subs []store.SubscriptionRow, 
 		var p passwordSNIParams
 		_ = json.Unmarshal([]byte(ib.Params), &p)
 		base["type"] = "trojan"
-		// Trojan identifies users by PASSWORD, not name: two
-		// entries sharing the inbound password fail the core
-		// check ("password used by 0"), so a trojan inbound
-		// gets exactly one user, named after the inbound
-		// itself, whenever at least one active subscription
-		// uses it. Trojan clients send only the password, so
-		// sharing one core user across subscriptions changes
-		// nothing client-side; per-subscription distinction
-		// for trojan was never real (shared password).
-		if len(subs) > 0 {
-			base["users"] = []any{map[string]any{"name": ib.Name, "password": p.Password}}
-		} else {
-			base["users"] = []any{}
+		// Trojan identifies users by PASSWORD, not name, so
+		// each subscription gets its own derived password
+		// (trojanpass) on the same port: distinct passwords
+		// pass the core check, and the core log then records
+		// which subscription's user connected, so traffic
+		// can be attributed per subscription. Clients must
+		// refresh their subscription to pick up the new
+		// password; the old shared password stops working.
+		users := []any{}
+		for _, sub := range subs {
+			users = append(users, map[string]any{"name": coreUserName(sub.Name, ib.Name), "password": trojanpass.Password(p.Password, sub.UUID)})
 		}
+		base["users"] = users
 		base["tls"] = tlsCert(p.SNI, nil)
 	default:
 		return nil, nil

@@ -11,9 +11,7 @@ import (
 )
 
 // Summary is the subscription page's traffic view: per-subscription
-// totals with a per-inbound breakdown, plus per-inbound totals
-// (including shared trojan traffic, which cannot be attributed to
-// a single subscription because the core user is shared).
+// totals with a per-inbound breakdown, plus per-inbound totals.
 type Summary struct {
 	Local          Snapshot              `json:"local"`
 	Nodes          []NodeTraffic         `json:"nodes"`
@@ -45,9 +43,8 @@ type InboundTraffic struct {
 
 // coreUserToSubscription maps a logged core username back to a
 // subscription name for one inbound. vless keeps the plain name;
-// password protocols (except trojan) use name+"-"+inbound. Trojan's
-// single user (named after the inbound) maps to no subscription:
-// it is shared traffic, reported under ByInbound only.
+// password protocols use name+"-"+inbound (trojan included, since
+// each subscription now has its own derived password and user).
 func coreUserToSubscription(user, inbound, protocol string, subs []store.SubscriptionRow) string {
 	if user == "" {
 		return ""
@@ -174,6 +171,45 @@ func (s *SummaryService) Summary(ctx context.Context) (Summary, error) {
 		out.ByInbound = append(out.ByInbound, *it)
 	}
 	return out, nil
+}
+
+// SyncUsage writes the collector's per-subscription totals back to
+// the subscriptions table, so the subscription page's quota meter
+// and the client's Subscription-Userinfo header show the same
+// actual client traffic the collector already attributes (local +
+// node, per core user). Subscriptions with no attributed traffic
+// are left untouched, and only changed totals are written, so an
+// idle ticker does not churn the table. Unassigned bytes and
+// inbound-only traffic (trojan before the per-subscription fix,
+// shadowsocks) are never forced onto a subscription.
+func (s *SummaryService) SyncUsage(ctx context.Context) (int, error) {
+	sum, err := s.Summary(ctx)
+	if err != nil {
+		return 0, err
+	}
+	subs, err := s.st.ListSubscriptions(ctx)
+	if err != nil {
+		return 0, err
+	}
+	byName := map[string]SubscriptionTraffic{}
+	for _, st := range sum.BySubscription {
+		byName[st.Name] = st
+	}
+	updated := 0
+	for _, sub := range subs {
+		tot, ok := byName[sub.Name]
+		if !ok {
+			continue
+		}
+		if tot.Up == sub.UsedUp && tot.Down == sub.UsedDown {
+			continue
+		}
+		if err := s.st.UpdateSubscriptionUsage(ctx, sub.ID, tot.Up, tot.Down); err != nil {
+			return updated, err
+		}
+		updated++
+	}
+	return updated, nil
 }
 
 type Handler struct {

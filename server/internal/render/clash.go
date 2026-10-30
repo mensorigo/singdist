@@ -178,9 +178,6 @@ func writeClashProxy(b *strings.Builder, n Node, cfg settings.View) {
 			b.WriteString("    skip-cert-verify: true\n")
 		}
 		b.WriteString("    udp-relay-mode: native\n")
-	case "shadowsocks":
-		fmt.Fprintf(b, "    type: ss\n    server: %s\n    port: %d\n    cipher: %s\n    password: %s\n    udp: true\n",
-			n.Server, n.Port, n.Method, n.Password)
 	case "anytls":
 		fmt.Fprintf(b, "    type: anytls\n    server: %s\n    port: %d\n    password: %s\n",
 			n.Server, n.Port, n.Password)

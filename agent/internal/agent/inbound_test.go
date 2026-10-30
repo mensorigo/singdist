@@ -57,24 +57,6 @@ func TestValidateRealityOK(t *testing.T) {
 	}
 }
 
-func TestValidateSS2022KeyLength(t *testing.T) {
-	// 12-byte key for a 16-byte method must fail (the regression
-	// script's original token_urlsafe(12) bug, panel-side).
-	bad := ssParams{Method: "2022-blake3-aes-128-gcm", Password: base64.StdEncoding.EncodeToString(make([]byte, 12))}
-	if _, err := validateParams(ProtocolShadowsocks, mustJSON(t, bad)); err == nil {
-		t.Fatal("short 2022 key must be rejected")
-	}
-	good := ssParams{Method: "2022-blake3-aes-128-gcm", Password: base64.StdEncoding.EncodeToString(make([]byte, 16))}
-	if _, err := validateParams(ProtocolShadowsocks, mustJSON(t, good)); err != nil {
-		t.Fatal(err)
-	}
-	// Unlisted real method passes verbatim (tier 2); the core's
-	// check is the final validator, not this function.
-	tier2 := ssParams{Method: "xchacha20-ietf-poly1305", Password: "whatever"}
-	if _, err := validateParams(ProtocolShadowsocks, mustJSON(t, tier2)); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func TestValidatePortTransportConflict(t *testing.T) {
 	reserved := map[int]string{2826: "SSH"}
