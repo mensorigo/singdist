@@ -39,7 +39,6 @@ const (
 	keyDNSFallback     = "dns_fallback"      // foreign | domestic
 	keyDNSRespectRules = "dns_respect_rules" // true | false
 
-	keyNodeName          = "sub_node_name"           // node name prefix, "" = none
 	keyLinkFormat        = "sub_link_format"         // clash | singbox
 	keySkipCertVerify    = "sub_skip_cert_verify"    // true | false
 	keyPublicHost        = "sub_public_host"         // "" = derive automatically
@@ -65,7 +64,6 @@ type View struct {
 	DNSFallback     string `json:"dnsFallback"`
 	DNSRespectRules bool   `json:"dnsRespectRules"`
 
-	NodeName          string `json:"nodeName"`
 	LinkFormat        string `json:"linkFormat"`
 	SkipCertVerify    bool   `json:"skipCertVerify"`
 	PublicHost        string `json:"publicHost"`
@@ -88,7 +86,6 @@ type Update struct {
 	DNSFallback     *string `json:"dnsFallback"`
 	DNSRespectRules *bool   `json:"dnsRespectRules"`
 
-	NodeName          *string `json:"nodeName"`
 	LinkFormat        *string `json:"linkFormat"`
 	SkipCertVerify    *bool   `json:"skipCertVerify"`
 	PublicHost        *string `json:"publicHost"`
@@ -137,7 +134,6 @@ func (s *Service) Get(ctx context.Context) (View, error) {
 	if err != nil {
 		return View{}, err
 	}
-	nodeName, err := s.get(ctx, keyNodeName, "")
 	if err != nil {
 		return View{}, err
 	}
@@ -198,7 +194,6 @@ func (s *Service) Get(ctx context.Context) (View, error) {
 		WebRTCMode:           mode,
 		DNSFallback:          fallback,
 		DNSRespectRules:      respect,
-		NodeName:             nodeName,
 		LinkFormat:           linkFormat,
 		SkipCertVerify:       skipCert,
 		PublicHost:           publicHost,
@@ -281,16 +276,6 @@ func (s *Service) Update(ctx context.Context, u Update) (View, string, error) {
 			return View{}, "", err
 		}
 		addBool("dnsRespectRules", old.DNSRespectRules, *u.DNSRespectRules)
-	}
-	if u.NodeName != nil {
-		name := strings.TrimSpace(*u.NodeName)
-		if len([]rune(name)) > 64 || strings.ContainsAny(name, "\r\n") {
-			return View{}, "", errValidation("nodeName must be at most 64 characters on one line")
-		}
-		if err := s.st.SetSetting(ctx, keyNodeName, name); err != nil {
-			return View{}, "", err
-		}
-		addStr("nodeName", old.NodeName, name)
 	}
 	if u.LinkFormat != nil {
 		switch *u.LinkFormat {

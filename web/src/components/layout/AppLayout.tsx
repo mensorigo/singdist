@@ -36,8 +36,9 @@ export const ROUTES: { key: RouteKey; path: string; label: string }[] = [
   { key: "nodes", path: "/nodes", label: "节点" },
   { key: "certificates", path: "/certificates", label: "证书管理" },
   { key: "security", path: "/security", label: "安全和隐私" },
-  { key: "settings", path: "/settings", label: "设置" },
   { key: "logs", path: "/logs", label: "日志" },
+  // 设置放在侧边栏最下面（退出登录上方）。
+  { key: "settings", path: "/settings", label: "设置" },
 ];
 
 const NAV_ICONS: Record<RouteKey, ReactNode> = {

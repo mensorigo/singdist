@@ -223,7 +223,11 @@ func validateHy2(p *Hy2Params, creating bool) error {
 	case "":
 		p.ObfsPassword = ""
 	case "salamander":
-		if creating && p.ObfsPassword == "" {
+		// Auto-generate on edit too, not only on create: editing
+		// an existing inbound from no-obfs to salamander leaves
+		// the password empty, and that transition was the case
+		// the original creating-only rule missed.
+		if p.ObfsPassword == "" {
 			p.ObfsPassword = randomPassword()
 		}
 		if p.ObfsPassword == "" {

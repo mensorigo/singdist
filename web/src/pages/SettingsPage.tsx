@@ -144,7 +144,6 @@ export default function SettingsPage({
 
   // Drafts for the text/number fields; committed on blur, resynced
   // whenever the saved settings change (including revert-on-error).
-  const [nodeNameDraft, setNodeNameDraft] = useState("");
   const [publicHostDraft, setPublicHostDraft] = useState("");
   const [intervalDraft, setIntervalDraft] = useState("24");
   const [dashDraft, setDashDraft] = useState("3");
@@ -169,7 +168,6 @@ export default function SettingsPage({
 
   useEffect(() => {
     if (settings) {
-      setNodeNameDraft(settings.nodeName);
       setPublicHostDraft(settings.publicHost);
       setIntervalDraft(String(settings.updateIntervalHours));
       setDashDraft(String(settings.dashIntervalSecs));
@@ -289,19 +287,6 @@ export default function SettingsPage({
         desc="生成订阅内容时使用的全局选项。"
       >
         <div className="divide-y">
-          <Row label="节点名前缀" hint="生成节点名的前缀">
-            <Input
-              value={nodeNameDraft}
-              disabled={saving}
-              onChange={(e) => setNodeNameDraft(e.target.value)}
-              onBlur={() => {
-                const v = nodeNameDraft.trim();
-                if (v !== settings.nodeName) apply({ nodeName: v });
-              }}
-              placeholder="留空则用入站名"
-              className="max-w-xs"
-            />
-          </Row>
           <Row label="默认格式">
             <Segmented
               value={settings.linkFormat}
@@ -313,7 +298,7 @@ export default function SettingsPage({
               ]}
             />
           </Row>
-          <Row label="对外地址" hint="客户端连接的服务器地址">
+          <Row label="本机对外地址" hint="只对本机节点生效：本机节点在订阅里的服务器地址，节点用自己的对外地址">
             <Input
               value={publicHostDraft}
               disabled={saving}

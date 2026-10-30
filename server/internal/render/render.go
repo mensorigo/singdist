@@ -56,10 +56,11 @@ func NewService(st *store.Store, settingsSvc *settings.Service) *Service {
 // password (per-subscription users for them arrive with the sync
 // engine).
 type Node struct {
-	Name     string
-	Protocol string
-	Server   string
-	Port     int
+	Name      string
+	Protocol  string
+	Server    string
+	Port      int
+	InboundID int64 // template inbound this node came from; group mapping only
 
 	UUID string // vless, tuic
 
@@ -118,7 +119,7 @@ type passwordSNIParams struct {
 	SNI      string `json:"sni"`
 }
 
-func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, host string, namePrefix string) ([]Node, error) {
+func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, host string) ([]Node, error) {
 	tpl, err := s.st.GetTemplate(ctx, sub.TemplateID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -160,11 +161,8 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 		if !ok {
 			continue
 		}
-		name := ib.Name
-		if namePrefix != "" {
-			name = namePrefix + "-" + name
-		}
-		add(name, n)
+		n.InboundID = id
+		add(ib.Name, n)
 	}
 	// Remote nodes: one endpoint per (online, unpaused node, assigned inbound in
 	// this template). Paused nodes are excluded even when online: pausing
@@ -217,6 +215,7 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 				if !ok {
 					continue
 				}
+				n.InboundID = id
 				add(rn.Name+"-"+ib.Name, n)
 			}
 		}
@@ -350,9 +349,54 @@ func (s *Service) Render(ctx context.Context, sub store.SubscriptionRow, format,
 		host = stripPort(reqHost)
 	}
 
-	nodes, err := s.buildAllNodes(ctx, sub, host, cfg.NodeName)
+	nodes, err := s.buildAllNodes(ctx, sub, host)
 	if err != nil {
 		return Result{}, err
+	}
+
+	// Proxy groups for Clash: effective template groups (defaults when
+	// the template stores none), each mapped to the generated node
+	// names whose inbound is in the group. A group with no generated
+	// nodes is skipped, so a group over a disabled/paused inbound
+	// simply disappears instead of rendering an empty group.
+	var clashGroups []ClashGroup
+	if tpl, terr := s.st.GetTemplate(ctx, sub.TemplateID); terr == nil {
+		var tplIDs []int64
+		_ = json.Unmarshal([]byte(tpl.InboundIDs), &tplIDs)
+		for _, g := range store.EffectiveProxyGroups(tpl.Groups, tplIDs) {
+			if !g.Enabled {
+				continue
+			}
+			want := map[int64]bool{}
+			for _, id := range g.InboundIDs {
+				want[id] = true
+			}
+			names := []string{}
+			seenNames := map[string]bool{}
+			for _, n := range nodes {
+				if want[n.InboundID] && !seenNames[n.Name] {
+					seenNames[n.Name] = true
+					names = append(names, n.Name)
+				}
+			}
+			if len(names) == 0 {
+				continue
+			}
+			clashGroups = append(clashGroups, ClashGroup{
+				Name: g.Name, Type: g.Type, Proxies: names,
+				URL: g.URL, Interval: g.Interval, Tolerance: g.Tolerance,
+			})
+		}
+	}
+	if len(clashGroups) == 0 {
+		// Fallback: never render a subscription without a group.
+		all := []string{}
+		for _, n := range nodes {
+			all = append(all, n.Name)
+		}
+		if len(all) > 0 {
+			clashGroups = []ClashGroup{{Name: "Proxy", Type: "select", Proxies: all}}
+		}
 	}
 
 	res := Result{
@@ -367,7 +411,7 @@ func (s *Service) Render(ctx context.Context, sub store.SubscriptionRow, format,
 	}
 	switch format {
 	case "clash":
-		res.Body = renderClash(nodes, cfg, host)
+		res.Body = renderClash(nodes, clashGroups, cfg, host)
 		res.ContentType = "text/yaml; charset=utf-8"
 	case "singbox":
 		body, err := renderSingbox(nodes, cfg, host)

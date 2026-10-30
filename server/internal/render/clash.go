@@ -13,11 +13,25 @@ var (
 	dnsForeign  = []string{"https://dns.cloudflare.com/dns-query", "https://dns.google/dns-query"}
 )
 
+// ClashGroup is one rendered proxy-group: name, Clash type, and the
+// generated node names it contains. URL/interval/tolerance apply to
+// url-test, fallback and load-balance groups; select groups ignore them.
+type ClashGroup struct {
+	Name      string
+	Type      string
+	Proxies   []string
+	URL       string
+	Interval  int
+	Tolerance int
+}
+
 // renderClash emits the Clash (Meta) YAML document. The layout mirrors
 // what mainstream panels (and the previous panel) produce: header,
-// fake-ip DNS with a fallback set chosen by settings, one select group
-// named "Proxy", STUN policy rules, private/CN direct, MATCH last.
-func renderClash(nodes []Node, cfg settings.View, host string) string {
+// fake-ip DNS with a fallback set chosen by settings, the template's
+// proxy groups (Proxy select first, then Auto/Fallback/custom), STUN
+// policy rules, private/CN direct, MATCH last (to Proxy when present,
+// else to the first group).
+func renderClash(nodes []Node, groups []ClashGroup, cfg settings.View, host string) string {
 	fallback := dnsForeign
 	if cfg.DNSFallback == "domestic" {
 		fallback = dnsDomestic
@@ -47,11 +61,39 @@ func renderClash(nodes []Node, cfg settings.View, host string) string {
 	b.WriteString("\n")
 
 	// --- groups ---
-	b.WriteString("proxy-groups:\n  - name: \"Proxy\"\n    type: select\n    proxies:\n")
-	for _, n := range nodes {
-		fmt.Fprintf(&b, "      - %s\n", n.Name)
+	b.WriteString("proxy-groups:\n")
+	for _, g := range groups {
+		fmt.Fprintf(&b, "  - name: %s\n    type: %s\n", strconv.Quote(g.Name), g.Type)
+		if g.Type == "url-test" || g.Type == "fallback" || g.Type == "load-balance" {
+			url := g.URL
+			if url == "" {
+				url = "https://www.gstatic.com/generate_204"
+			}
+			interval := g.Interval
+			if interval <= 0 {
+				interval = 300
+			}
+			fmt.Fprintf(&b, "    url: %s\n    interval: %d\n", url, interval)
+			if g.Type == "url-test" {
+				tolerance := g.Tolerance
+				if tolerance <= 0 {
+					tolerance = 50
+				}
+				fmt.Fprintf(&b, "    tolerance: %d\n", tolerance)
+			}
+			if g.Type == "load-balance" {
+				b.WriteString("    strategy: round-robin\n")
+			}
+		}
+		b.WriteString("    proxies:\n")
+		for _, name := range g.Proxies {
+			fmt.Fprintf(&b, "      - %s\n", name)
+		}
+		if g.Type == "select" {
+			b.WriteString("      - DIRECT\n")
+		}
 	}
-	b.WriteString("      - DIRECT\n\n")
+	b.WriteString("\n")
 
 	// --- rules ---
 	b.WriteString("rules:\n")
@@ -68,7 +110,21 @@ func renderClash(nodes []Node, cfg settings.View, host string) string {
 			fmt.Fprintf(&b, "  - DOMAIN,%s,DIRECT\n", host)
 		}
 	}
-	b.WriteString("  - GEOSITE,private,DIRECT\n  - GEOIP,private,DIRECT,no-resolve\n  - GEOSITE,cn,DIRECT\n  - GEOIP,CN,DIRECT\n  - MATCH,Proxy\n")
+	match := ""
+	for _, g := range groups {
+		if g.Name == "Proxy" {
+			match = "Proxy"
+			break
+		}
+	}
+	if match == "" && len(groups) > 0 {
+		match = groups[0].Name
+	}
+	if match == "" {
+		match = "DIRECT"
+	}
+	b.WriteString("  - GEOSITE,private,DIRECT\n  - GEOIP,private,DIRECT,no-resolve\n  - GEOSITE,cn,DIRECT\n  - GEOIP,CN,DIRECT\n")
+	fmt.Fprintf(&b, "  - MATCH,%s\n", match)
 	return b.String()
 }
 

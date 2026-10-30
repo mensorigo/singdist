@@ -136,6 +136,21 @@ textarea {
   user-select: text;
 }
 
+/* Number-input spinners: the browser's native +/- control renders
+   its own gray button background that does not match the panel's
+   dark theme (a gray layer under the bottom arrow). The spinner is
+   not needed — these fields are typed, not stepped — so hide it
+   entirely instead of trying to restyle a UA control. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
 /* Subtle scrollbar for the version history list: thinner and fainter
    than the panel's global scrollbar, no arrow buttons at either end,
    transparent track — it reads as part of the edge, not a control. */

@@ -610,7 +610,6 @@ export interface SettingsView {
   webrtcMode: "proxy" | "reject" | "off";
   dnsFallback: "foreign" | "domestic";
   dnsRespectRules: boolean;
-  nodeName: string;
   linkFormat: "clash" | "singbox";
   skipCertVerify: boolean;
   publicHost: string;
@@ -628,7 +627,6 @@ export interface SettingsUpdate {
   webrtcMode?: SettingsView["webrtcMode"];
   dnsFallback?: SettingsView["dnsFallback"];
   dnsRespectRules?: boolean;
-  nodeName?: string;
   linkFormat?: SettingsView["linkFormat"];
   skipCertVerify?: boolean;
   publicHost?: string;
@@ -642,10 +640,21 @@ export interface SettingsUpdate {
   autoSyncIntervalSecs?: number;
 }
 
+export interface TemplateGroup {
+  name: string;
+  type: string;
+  inboundIds: number[];
+  enabled: boolean;
+  url?: string;
+  interval?: number;
+  tolerance?: number;
+}
+
 export interface TemplateView {
   id: number;
   name: string;
   inboundIds: number[];
+  groups: TemplateGroup[];
   subscriptionCount: number;
   createdAt: number;
   updatedAt: number;
@@ -654,6 +663,7 @@ export interface TemplateView {
 export interface TemplateRequest {
   name: string;
   inboundIds: number[];
+  groups?: TemplateGroup[];
 }
 
 export type SubscriptionStatus =

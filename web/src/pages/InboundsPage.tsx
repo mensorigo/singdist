@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -138,6 +139,23 @@ const PROTOCOL_LABEL: Record<InboundProtocol, string> = {
   trojan: "Trojan",
 };
 
+// 传输类型（TCP / UDP）由协议固定，跟后端 protocolSpecs 的 transport 一致。
+const PROTOCOL_TRANSPORT: Record<InboundProtocol, string> = {
+  "vless-reality": "TCP",
+  hysteria2: "UDP",
+  tuic: "UDP",
+  shadowsocks: "TCP+UDP",
+  anytls: "TCP",
+  trojan: "TCP",
+};
+
+// 入站实际运行的机器：本机或某个节点，含该机器上的端口。
+interface MachineInfo {
+  name: string;
+  ip: string;
+  port: number;
+}
+
 const DEFAULT_PORT: Record<InboundProtocol, number> = {
   "vless-reality": 443,
   hysteria2: 8443,
@@ -243,6 +261,7 @@ export default function InboundsPage({
 }) {
   const [tab, setTab] = useState<"inbounds" | "templates">("inbounds");
   const [list, setList] = useState<InboundList | null>(null);
+  const [machines, setMachines] = useState<Record<number, MachineInfo>>({});
   const [loadError, setLoadError] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -258,6 +277,50 @@ export default function InboundsPage({
       const data = await api.inbounds.list();
       setList(data);
       setLoadError(false);
+      // 运行机器信息：本机取 local-machine，节点取节点列表 + 入站分配。
+      // 机器信息拿不到时列表照常显示，对应格子显示“—”。
+      void (async () => {
+        try {
+          const [lm, nodeList] = await Promise.all([
+            api.localMachine(),
+            api.nodes.list(),
+          ]);
+          const byId = new Map(nodeList.map((n) => [n.id, n]));
+          const info: Record<number, MachineInfo> = {};
+          await Promise.all(
+            data.items.map(async (v) => {
+              if (v.runLocal) {
+                info[v.id] = {
+                  name: lm.hostname || "本机",
+                  ip: lm.ip || "—",
+                  port: v.port,
+                };
+                return;
+              }
+              try {
+                const res = await api.nodes.getInboundNodes(v.id);
+                const first = res.nodes?.[0];
+                const node = first ? byId.get(first.nodeId) : undefined;
+                if (node) {
+                  const host = (node.publicHost || node.address || "").split(
+                    ":",
+                  )[0];
+                  info[v.id] = {
+                    name: node.name || "—",
+                    ip: host || "—",
+                    port: first.port > 0 ? first.port : v.port,
+                  };
+                }
+              } catch {
+                // 节点信息拿不到时该行机器格留空，不影响列表本身。
+              }
+            }),
+          );
+          setMachines(info);
+        } catch {
+          // 机器信息整体拿不到时列表照常显示。
+        }
+      })();
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         window.location.reload();
@@ -397,12 +460,15 @@ export default function InboundsPage({
           <p className="mt-2 text-[13px] text-destructive">{actionError}</p>
         )}
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full min-w-[720px] text-sm">
+          <table className="w-full min-w-[920px] text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
                 <th className="py-2 pr-3 font-medium">名称</th>
-                <th className="py-2 pr-3 font-medium">协议</th>
+                <th className="py-2 pr-3 font-medium">运行机器</th>
+                <th className="py-2 pr-3 font-medium">机器IP</th>
                 <th className="py-2 pr-3 font-medium">端口</th>
+                <th className="py-2 pr-3 font-medium">协议</th>
+                <th className="py-2 pr-3 font-medium">传输</th>
                 <th className="py-2 pr-3 font-medium">状态</th>
                 <th className="py-2 font-medium">操作</th>
               </tr>
@@ -419,11 +485,24 @@ export default function InboundsPage({
                     {v.name}
                   </td>
                   <td className="py-2.5 pr-3">
+                    {machines[v.id]?.name ?? (v.runLocal ? "本机" : "—")}
+                  </td>
+                  <td className="py-2.5 pr-3 tabular-nums">
+                    {machines[v.id]?.ip ?? "—"}
+                  </td>
+                  <td className="py-2.5 pr-3 tabular-nums">
+                    {machines[v.id]?.port ?? v.port}
+                  </td>
+                  <td className="py-2.5 pr-3">
                     <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
                       {PROTOCOL_LABEL[v.protocol]}
                     </span>
                   </td>
-                  <td className="py-2.5 pr-3 tabular-nums">{v.port}</td>
+                  <td className="py-2.5 pr-3">
+                    <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                      {PROTOCOL_TRANSPORT[v.protocol]}
+                    </span>
+                  </td>
                   <td className="py-2.5 pr-3">
                     <StatusBadge
                       status={v.status}
@@ -435,7 +514,7 @@ export default function InboundsPage({
                       v.diffs.length > 0 && <DiffsList diffs={v.diffs} />}
                   </td>
                   <td className="py-2.5">
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center gap-3">
                       <EnabledSwitch
                         enabled={v.enabled}
                         disabled={busyId === v.id}
@@ -468,7 +547,7 @@ export default function InboundsPage({
               {list.items.length === 0 && (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={8}
                     className="py-6 text-center text-sm text-muted-foreground"
                   >
                     暂无入站，点右上角「新建入站」创建
@@ -798,6 +877,7 @@ function InboundFormDialog({
   };
 
   return (
+    <>
     <Dialog
       open
       onOpenChange={(open) => {
@@ -846,7 +926,7 @@ function InboundFormDialog({
               id="inb-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例如：主线 VLESS"
+              placeholder="入站节点备注"
               required
             />
           </div>
@@ -1054,7 +1134,7 @@ function InboundFormDialog({
                       id="inb-obfspw"
                       value={obfsPassword}
                       onChange={setObfsPassword}
-                      placeholder="留空则创建时自动生成"
+                      placeholder="留空则自动生成"
                     />
                   </div>
                 )}
@@ -1286,7 +1366,11 @@ function InboundFormDialog({
           )}
 
           {formError && (
-            <p className="text-[13px] text-destructive">{formError}</p>
+            <div className="rounded-[18px] border border-red-500/50 bg-red-500/10 px-4 py-3">
+              <p className="text-sm font-medium text-red-600 dark:text-red-400">
+                {formError}
+              </p>
+            </div>
           )}
           <DialogFooter>
             <Button
@@ -1304,5 +1388,27 @@ function InboundFormDialog({
         </form>
       </DialogContent>
     </Dialog>
+      {/* Error popup: the inline banner above stays, but a modal
+          on top is what actually gets noticed — the old faint red
+          line at the bottom of the form was easy to miss. */}
+      <Dialog
+        open={formError !== null}
+        onOpenChange={(open) => {
+          if (!open) setFormError(null);
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>保存失败</DialogTitle>
+            <DialogDescription>{formError ?? ""}</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button type="button" onClick={() => setFormError(null)}>
+              知道了
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

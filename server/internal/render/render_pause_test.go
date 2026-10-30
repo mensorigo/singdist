@@ -26,7 +26,7 @@ func TestBuildAllNodesExcludesPaused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateInbound: %v", err)
 	}
-	tplID, err := st.CreateTemplate(ctx, "tpl", fmt.Sprintf("[%d]", ibID), now)
+	tplID, err := st.CreateTemplate(ctx, "tpl", fmt.Sprintf("[%d]", ibID), "", now)
 	if err != nil {
 		t.Fatalf("CreateTemplate: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestBuildAllNodesExcludesPaused(t *testing.T) {
 	}
 	svc := NewService(st, nil)
 	sub := store.SubscriptionRow{TemplateID: tplID, Name: "sub1", UUID: "uuid-1"}
-	nodes, err := svc.buildAllNodes(ctx, sub, "panel.example", "")
+	nodes, err := svc.buildAllNodes(ctx, sub, "panel.example")
 	if err != nil {
 		t.Fatalf("buildAllNodes enabled: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestBuildAllNodesExcludesPaused(t *testing.T) {
 	if err := st.UpdateNode(ctx, *row); err != nil {
 		t.Fatalf("UpdateNode paused: %v", err)
 	}
-	nodes, err = svc.buildAllNodes(ctx, sub, "panel.example", "")
+	nodes, err = svc.buildAllNodes(ctx, sub, "panel.example")
 	if err != nil {
 		t.Fatalf("buildAllNodes paused: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestBuildAllNodesExcludesPaused(t *testing.T) {
 	if err := st.UpdateNode(ctx, *row); err != nil {
 		t.Fatalf("UpdateNode enabled: %v", err)
 	}
-	nodes, err = svc.buildAllNodes(ctx, sub, "panel.example", "")
+	nodes, err = svc.buildAllNodes(ctx, sub, "panel.example")
 	if err != nil {
 		t.Fatalf("buildAllNodes re-enabled: %v", err)
 	}

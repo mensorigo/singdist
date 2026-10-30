@@ -129,8 +129,15 @@ func compareTuic(params string, m *RunningInbound) []Diff {
 		return nil
 	}
 	var diffs []Diff
-	if m.UUID != "" && p.UUID != m.UUID {
-		diffs = append(diffs, Diff{Field: "uuid", Panel: p.UUID, Running: m.UUID})
+	// Do NOT compare UUIDs: core TUIC users are generated per
+	// subscription (uuid = subscription UUID), never from the
+	// inbound's own stored UUID, so the panel UUID and the first
+	// core user's UUID can never match — comparing them flagged
+	// every TUIC inbound as drifted even when fully synced.
+	// The inbound UUID is a dormant legacy field, kept for schema
+	// stability, not a comparable value.
+	if p.SNI != m.SNI {
+		diffs = append(diffs, Diff{Field: "sni", Panel: p.SNI, Running: m.SNI})
 	}
 	// An absent congestion_control in the running config means the core
 	// default; only flag an explicit mismatch.

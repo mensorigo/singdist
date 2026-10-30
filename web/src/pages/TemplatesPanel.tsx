@@ -3,7 +3,15 @@ import { Pencil, Trash } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { EnabledSwitch } from "@/components/enabled-switch";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -17,6 +25,7 @@ import {
   api,
   ApiError,
   type InboundView,
+  type TemplateGroup,
   type TemplateView,
 } from "@/lib/api";
 
@@ -221,6 +230,68 @@ export default function TemplatesPanel({
   );
 }
 
+// --- template form: proxy groups -----------------------------------------------
+// 分组已接线：模板保存时把分组写进后端，订阅生成时输出这些组。
+// 默认组（Proxy / Auto / Fallback）与自定义组一样可编辑节点，
+// 区别只是默认组不能删除、不能改名。
+type GroupType = "select" | "url-test" | "fallback" | "load-balance";
+
+const GROUP_TYPE_LABEL: Record<GroupType, string> = {
+  select: "手动选择",
+  "url-test": "自动选择",
+  fallback: "故障转移",
+  "load-balance": "负载均衡",
+};
+
+interface GroupDraft {
+  id: string;
+  name: string;
+  type: GroupType;
+  nodeIds: number[];
+  enabled: boolean;
+  url: string;
+  interval: number;
+  tolerance: number;
+}
+
+// 默认组：名字 + 类型与后端默认值一致的组，不能删除、不能改名，
+// 但可以编辑节点和开关。自定义组可删可改名。
+function isDefaultGroup(g: GroupDraft): boolean {
+  return (
+    (g.name === "Proxy" && g.type === "select") ||
+    (g.name === "Auto" && g.type === "url-test") ||
+    (g.name === "Fallback" && g.type === "fallback")
+  );
+}
+
+function toDraft(g: TemplateGroup, fallbackId: string): GroupDraft {
+  return {
+    id: fallbackId,
+    name: g.name,
+    type: (g.type as GroupType) ?? "select",
+    nodeIds: g.inboundIds ?? [],
+    enabled: g.enabled !== false,
+    url: g.url ?? "https://www.gstatic.com/generate_204",
+    interval: g.interval ?? 300,
+    tolerance: g.tolerance ?? 50,
+  };
+}
+
+function toApiGroup(g: GroupDraft): TemplateGroup {
+  const out: TemplateGroup = {
+    name: g.name,
+    type: g.type,
+    inboundIds: g.nodeIds,
+    enabled: g.enabled,
+  };
+  if (g.type !== "select") {
+    out.url = g.url || "https://www.gstatic.com/generate_204";
+    out.interval = g.interval > 0 ? g.interval : 300;
+    out.tolerance = g.tolerance >= 0 ? g.tolerance : 50;
+  }
+  return out;
+}
+
 // --- template form --------------------------------------------------------------
 
 function TemplateFormDialog({
@@ -236,21 +307,64 @@ function TemplateFormDialog({
 }) {
   const creating = item === null;
   const [name, setName] = useState(item?.name ?? "");
-  const [selected, setSelected] = useState<number[]>(item?.inboundIds ?? []);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-
-  const toggle = (id: number) =>
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+  // 第一层只管分组，不管节点：节点只在分组编辑（第二层）里挑。
+  // 老模板以后端返回的有效分组初始化；新建模板的 3 个默认组
+  // 节点为空，点编辑进去再加。
+  const [groups, setGroups] = useState<GroupDraft[]>(() => {
+    if (item !== null) {
+      return (item.groups ?? []).map((g, i) => toDraft(g, `group-${i}`));
+    }
+    const empty: GroupDraft[] = [
+      { id: "group-proxy", name: "Proxy", type: "select", nodeIds: [], enabled: true, url: "https://www.gstatic.com/generate_204", interval: 300, tolerance: 50 },
+      { id: "group-auto", name: "Auto", type: "url-test", nodeIds: [], enabled: true, url: "https://www.gstatic.com/generate_204", interval: 300, tolerance: 50 },
+      { id: "group-fallback", name: "Fallback", type: "fallback", nodeIds: [], enabled: true, url: "https://www.gstatic.com/generate_204", interval: 300, tolerance: 50 },
+    ];
+    return empty;
+  });
+  const [groupDialog, setGroupDialog] = useState<GroupDraft | "new" | null>(
+    null,
+  );
+  const [pendingGroupDelete, setPendingGroupDelete] = useState<GroupDraft | null>(
+    null,
+  );
+  const nodeChips = (ids: number[]) => {
+    const nodes = inbounds.filter((ib) => ids.includes(ib.id));
+    if (nodes.length === 0)
+      return <span className="text-muted-foreground">（空）</span>;
+    return (
+      <div className="flex flex-wrap gap-1.5">
+        {nodes.map((ib) => (
+          <span
+            key={ib.id}
+            className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground"
+          >
+            {ib.name}（{ib.port}）
+          </span>
+        ))}
+      </div>
     );
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
     setSubmitting(true);
     try {
-      const body = { name: name.trim(), inboundIds: selected };
+      // 模板入站 = 所有分组节点的并集（含已关闭的组，关掉的组
+      // 节点仍在全局节点列表里，只是没有分组引用它）。
+      const union: number[] = [];
+      for (const g of groups) {
+        for (const id of g.nodeIds) {
+          if (!union.includes(id)) union.push(id);
+        }
+      }
+      const body = {
+        name: name.trim(),
+        inboundIds: union,
+        groups: groups.map((g) => toApiGroup(g)),
+      };
       if (creating) {
         await api.templates.create(body);
         toast.success("模板已创建");
@@ -273,7 +387,7 @@ function TemplateFormDialog({
         if (!open) onClose();
       }}
     >
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{creating ? "新建模板" : "编辑模板"}</DialogTitle>
         </DialogHeader>
@@ -288,9 +402,250 @@ function TemplateFormDialog({
               required
             />
           </div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label>分组</Label>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-8 rounded-xl px-3"
+                onClick={() => setGroupDialog("new")}
+              >
+                新建分组
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              第一层只创建和管理分组，不选节点；节点在分组编辑里挑。默认组不能删除、不能改名，但可以点编辑改节点和开关。模板入站 = 所有分组节点的并集。
+            </p>
+            <div className="grid gap-3 sm:grid-cols-3">
+              {groups.map((g) => (
+                <div
+                  key={g.id}
+                  className={`rounded-[18px] border px-4 py-3 ${isDefaultGroup(g) ? "bg-muted/30" : "bg-card"}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium">{g.name}</span>
+                    <div className="flex items-center gap-1">
+                      <EnabledSwitch
+                        enabled={g.enabled}
+                        onToggle={() =>
+                          setGroups((prev) =>
+                            prev.map((x) =>
+                              x.id === g.id
+                                ? { ...x, enabled: !x.enabled }
+                                : x,
+                            ),
+                          )
+                        }
+                      />
+                      <button
+                        type="button"
+                        title="编辑分组"
+                        aria-label="编辑分组"
+                        onClick={() => setGroupDialog(g)}
+                        className={ICON_BTN_CLS}
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      {!isDefaultGroup(g) && (
+                        <button
+                          type="button"
+                          title="删除分组"
+                          aria-label="删除分组"
+                          onClick={() => setPendingGroupDelete(g)}
+                          className={ICON_BTN_CLS}
+                        >
+                          <Trash className="h-4 w-4" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                      {GROUP_TYPE_LABEL[g.type]}
+                    </span>
+                    {isDefaultGroup(g) && (
+                      <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
+                        系统默认
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-2.5">{nodeChips(g.nodeIds)}</div>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              预览：
+              {groups
+                .filter((g) => g.enabled)
+                .map((g) => `${g.name} ${g.nodeIds.length} 个节点`)
+                .join(" · ") || "（全部关闭，订阅将没有分组）"}
+            </p>
+          </div>
+          {formError && (
+            <p className="text-[13px] text-destructive">{formError}</p>
+          )}
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={onClose}
+              disabled={submitting}
+            >
+              取消
+            </Button>
+            <Button type="submit" disabled={submitting}>
+              {submitting ? "保存中…" : creating ? "创建" : "保存"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+      {groupDialog !== null && (
+        <GroupFormDialog
+          item={groupDialog === "new" ? null : groupDialog}
+          inbounds={inbounds}
+          onClose={() => setGroupDialog(null)}
+          onSaved={(g) => {
+            setGroups((prev) => {
+              const found = prev.some((x) => x.id === g.id);
+              return found
+                ? prev.map((x) => (x.id === g.id ? g : x))
+                : [...prev, g];
+            });
+            setGroupDialog(null);
+          }}
+        />
+      )}
+      <ConfirmDialog
+        open={pendingGroupDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingGroupDelete(null);
+        }}
+        title="删除分组"
+        description={
+          pendingGroupDelete
+            ? `确定要删除分组「${pendingGroupDelete.name}」吗？保存模板后订阅里就不再生成它。`
+            : undefined
+        }
+        confirmLabel="删除"
+        destructive
+        onConfirm={() => {
+          if (!pendingGroupDelete) return;
+          setGroups((prev) =>
+            prev.filter((x) => x.id !== pendingGroupDelete.id),
+          );
+          setPendingGroupDelete(null);
+        }}
+      />
+    </Dialog>
+  );
+}
+
+function GroupFormDialog({
+  item,
+  inbounds,
+  onClose,
+  onSaved,
+}: {
+  item: GroupDraft | null;
+  inbounds: InboundView[];
+  onClose: () => void;
+  onSaved: (g: GroupDraft) => void;
+}) {
+  const creating = item === null;
+  const [gName, setGName] = useState(item?.name ?? "");
+  const [gType, setGType] = useState<GroupType>(item?.type ?? "select");
+  const [gNodes, setGNodes] = useState<number[]>(item?.nodeIds ?? []);
+  const [gUrl, setGUrl] = useState(
+    item?.url ?? "https://www.gstatic.com/generate_204",
+  );
+  const [gInterval, setGInterval] = useState(String(item?.interval ?? 300));
+  const [gTolerance, setGTolerance] = useState(String(item?.tolerance ?? 50));
+  const defaultGroup = item !== null && isDefaultGroup(item);
+  const [gError, setGError] = useState<string | null>(null);
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (gName.trim() === "") {
+      setGError("请填分组名字");
+      return;
+    }
+    onSaved({
+      id: item?.id ?? `local-${Date.now()}`,
+      name: gName.trim(),
+      type: gType,
+      nodeIds: gNodes,
+      enabled: item?.enabled ?? true,
+      url: gUrl,
+      interval: Number(gInterval) || 300,
+      tolerance: Number(gTolerance) || 50,
+    });
+  };
+
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{creating ? "新建分组" : "编辑分组"}</DialogTitle>
+        </DialogHeader>
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label>包含的入站</Label>
-            <div className="space-y-1.5">
+            <Label htmlFor="grp-name">
+              分组名字{defaultGroup ? "（系统默认，不可改）" : ""}
+            </Label>
+            <Input
+              id="grp-name"
+              value={gName}
+              onChange={(e) => setGName(e.target.value)}
+              placeholder="例如：香港组"
+              disabled={defaultGroup}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>类型</Label>
+            <Select
+              value={gType}
+              onValueChange={(v) => setGType(v as GroupType)}
+              disabled={defaultGroup}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(GROUP_TYPE_LABEL) as GroupType[]).map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {GROUP_TYPE_LABEL[t]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>包含的节点</Label>
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={
+                    inbounds.length > 0 &&
+                    inbounds.every((ib) => gNodes.includes(ib.id))
+                  }
+                  onChange={(e) =>
+                    setGNodes(
+                      e.target.checked ? inbounds.map((ib) => ib.id) : [],
+                    )
+                  }
+                  className="h-4 w-4 accent-primary"
+                />
+                全选
+              </label>
+            </div>
+            <div className="max-h-[220px] space-y-1.5 overflow-y-auto pr-1">
               {inbounds.map((ib) => (
                 <label
                   key={ib.id}
@@ -298,8 +653,14 @@ function TemplateFormDialog({
                 >
                   <input
                     type="checkbox"
-                    checked={selected.includes(ib.id)}
-                    onChange={() => toggle(ib.id)}
+                    checked={gNodes.includes(ib.id)}
+                    onChange={() =>
+                      setGNodes((prev) =>
+                        prev.includes(ib.id)
+                          ? prev.filter((x) => x !== ib.id)
+                          : [...prev, ib.id],
+                      )
+                    }
                     className="h-4 w-4 accent-primary"
                   />
                   <span className="font-medium">{ib.name}</span>
@@ -317,21 +678,49 @@ function TemplateFormDialog({
               )}
             </div>
           </div>
-          {formError && (
-            <p className="text-[13px] text-destructive">{formError}</p>
+          <details className="space-y-2">
+            <summary className="cursor-pointer text-sm text-muted-foreground">
+              高级（测速地址、间隔、容差）
+            </summary>
+            <div className="space-y-2 pt-1">
+              <div className="space-y-2">
+                <Label htmlFor="grp-url">测速地址</Label>
+                <Input
+                  id="grp-url"
+                  value={gUrl}
+                  onChange={(e) => setGUrl(e.target.value)}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="grp-interval">间隔（秒）</Label>
+                  <Input
+                    id="grp-interval"
+                    type="number"
+                    value={gInterval}
+                    onChange={(e) => setGInterval(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="grp-tolerance">容差（毫秒）</Label>
+                  <Input
+                    id="grp-tolerance"
+                    type="number"
+                    value={gTolerance}
+                    onChange={(e) => setGTolerance(e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          </details>
+          {gError && (
+            <p className="text-[13px] text-destructive">{gError}</p>
           )}
           <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-              disabled={submitting}
-            >
+            <Button type="button" variant="outline" onClick={onClose}>
               取消
             </Button>
-            <Button type="submit" disabled={submitting}>
-              {submitting ? "保存中…" : creating ? "创建" : "保存"}
-            </Button>
+            <Button type="submit">{creating ? "添加" : "保存"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -808,12 +808,12 @@ function NodeFormDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="node-name">备注</Label>
+            <Label htmlFor="node-name">备注（选填）</Label>
             <Input
               id="node-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="主机备注"
+              placeholder="留空则自动使用主机名"
             />
           </div>
           <div className="space-y-2">

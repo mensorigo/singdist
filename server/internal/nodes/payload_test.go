@@ -35,7 +35,7 @@ func seedPayloadStore(t *testing.T) (*store.Store, *certs.Manager, store.NodeRow
 	if err != nil {
 		t.Fatalf("CreateInbound ss: %v", err)
 	}
-	tplID, err := st.CreateTemplate(ctx, "all", `[`+strconv.FormatInt(vlessID, 10)+`,`+strconv.FormatInt(ssID, 10)+`]`, now)
+	tplID, err := st.CreateTemplate(ctx, "all", `[`+strconv.FormatInt(vlessID, 10)+`,`+strconv.FormatInt(ssID, 10)+`]`, "", now)
 	if err != nil {
 		t.Fatalf("CreateTemplate: %v", err)
 	}

@@ -226,12 +226,12 @@ func TestDeletePanelOnly(t *testing.T) {
 	assign(ibLocal, nodeA)
 	assign(ibOther, nodeB)
 	tpl1, err := st.CreateTemplate(ctx, "tpl1",
-		fmt.Sprintf("[%d,%d,%d,%d]", ibSingle, ibShared, ibLocal, ibOther), now)
+		fmt.Sprintf("[%d,%d,%d,%d]", ibSingle, ibShared, ibLocal, ibOther), "", now)
 	if err != nil {
 		t.Fatalf("CreateTemplate tpl1: %v", err)
 	}
 	tpl2, err := st.CreateTemplate(ctx, "tpl2",
-		fmt.Sprintf("[%d]", ibSingle), now)
+		fmt.Sprintf("[%d]", ibSingle), "", now)
 	if err != nil {
 		t.Fatalf("CreateTemplate tpl2: %v", err)
 	}
