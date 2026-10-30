@@ -180,6 +180,46 @@ func (s *Store) CoreLogsUsedBytes(ctx context.Context) (int64, error) {
 	return used, nil
 }
 
+// RecentConnections returns, per client source address (IP:port),
+// the latest connection record at or after sinceMs: inbound tag
+// and core username. The traffic collector matches Clash
+// connections to these records by source address.
+func (s *Store) RecentConnections(ctx context.Context, sinceMs int64) (map[string]struct {
+	Tag  string
+	User string
+}, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT source, tag, user, ts FROM core_logs WHERE kind = 'connection' AND ts >= ? ORDER BY ts DESC`, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct {
+		Tag  string
+		User string
+	}{}
+	for rows.Next() {
+		var source, tag, user string
+		var ts int64
+		if err := rows.Scan(&source, &tag, &user, &ts); err != nil {
+			return nil, err
+		}
+		if source == "" || tag == "" {
+			continue
+		}
+		if _, ok := out[source]; !ok {
+			out[source] = struct {
+				Tag  string
+				User string
+			}{Tag: tag, User: user}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OnlineIPs returns, per log user name, the set of distinct source IPs
 // with a connection record at or after sinceMs. Source is "ip:port"
 // (Go Addr.String form, so IPv6 arrives bracketed); the port is

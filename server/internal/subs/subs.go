@@ -1,8 +1,10 @@
 // Package subs owns subscription records: a subscription binds one
 // template (owned by internal/templates) and is the unit of
-// distribution and governance (one link = one core user). Rendering
-// and serving subscription content is a separate later phase; nothing
-// here touches the core.
+// distribution and governance (one link = one client identity).
+// Password protocols get one core user per (subscription, inbound)
+// in coresync generation, so online-IP attribution must sum those
+// renamed names too; rendering and serving subscription content is
+// a separate later phase; nothing here touches the core.
 package subs
 
 import (
@@ -10,6 +12,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -185,10 +188,42 @@ func (s *Service) OnlineIPCounts(ctx context.Context) (OnlineIPResult, error) {
 	if err != nil {
 		return OnlineIPResult{}, err
 	}
+	// Core usernames for password protocols are renamed per
+	// (subscription, inbound) in coresync generation, so a
+	// subscription's IPs are the union over its plain name (vless)
+	// and its renamed names on its template's inbounds. This is
+	// computed from the stored template/inbound rows, never by
+	// parsing a core username, so hyphenated names cannot mislead
+	// it. Any load failure falls back to plain-name attribution.
+	inboundByID := map[int64]store.InboundRow{}
+	if inbounds, err := s.st.ListInbounds(ctx); err == nil {
+		for _, ib := range inbounds {
+			inboundByID[ib.ID] = ib
+		}
+	}
+	templateInboundIDs := map[int64][]int64{}
+	if templates, err := s.st.ListTemplates(ctx); err == nil {
+		for _, t := range templates {
+			var ids []int64
+			if err := json.Unmarshal([]byte(t.InboundIDs), &ids); err == nil {
+				templateInboundIDs[t.ID] = ids
+			}
+		}
+	}
 	res := OnlineIPResult{Counts: map[int64]int{}}
 	union := map[string]struct{}{}
 	for _, r := range rows {
-		ips := sets[r.Name]
+		ips := map[string]struct{}{}
+		for ip := range sets[r.Name] {
+			ips[ip] = struct{}{}
+		}
+		for _, ibID := range templateInboundIDs[r.TemplateID] {
+			if ib, ok := inboundByID[ibID]; ok {
+				for ip := range sets[r.Name+"-"+ib.Name] {
+					ips[ip] = struct{}{}
+				}
+			}
+		}
 		res.Counts[r.ID] = len(ips)
 		for ip := range ips {
 			union[ip] = struct{}{}

@@ -169,15 +169,22 @@ func compareSNIBased(params string, m *RunningInbound) []Diff {
 // --- imports ------------------------------------------------------------------
 
 func importReality(r *RunningInbound) string {
+	flow := r.Flow
+	if flow == "" {
+		flow = "xtls-rprx-vision"
+	}
 	b, _ := json.Marshal(RealityParams{
 		SNI: r.SNI, PublicKey: r.PublicKey, PrivateKey: r.PrivateKey,
-		ShortID: r.ShortID, Flow: "xtls-rprx-vision",
+		ShortID: r.ShortID, Flow: flow,
 	})
 	return string(b)
 }
 
 func importHy2(r *RunningInbound) string {
-	b, _ := json.Marshal(Hy2Params{UpMbps: r.UpMbps, DownMbps: r.DownMbps, Password: r.Password})
+	b, _ := json.Marshal(Hy2Params{
+		UpMbps: r.UpMbps, DownMbps: r.DownMbps, Password: r.Password,
+		Obfs: r.Obfs, ObfsPassword: r.ObfsPassword,
+	})
 	return string(b)
 }
 

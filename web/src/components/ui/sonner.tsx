@@ -21,11 +21,21 @@ export function Toaster({ theme }: { theme: Theme }) {
       duration={2600}
       gap={12}
       visibleToasts={3}
-      style={{ "--width": "fit-content" } as React.CSSProperties}
+      // Sonner's own CSS sets the toast corner radius from its
+      // --border-radius variable (default 8px) with a selector
+      // stronger than a Tailwind class, so the rounded-[18px]
+      // class alone was ignored. Overriding the variable here
+      // is what actually moves it to 18px.
+      style={
+        {
+          "--width": "fit-content",
+          "--border-radius": "18px",
+        } as React.CSSProperties
+      }
       toastOptions={{
         classNames: {
           toast:
-            "min-h-[68px] min-w-[min(300px,calc(100vw-32px))] max-w-[min(420px,calc(100vw-32px))] rounded-xl border bg-background px-4 py-4 text-foreground shadow-lg [&_[data-content]]:ml-1.5 [&_[data-icon]]:shrink-0",
+            "min-h-[68px] min-w-[min(300px,calc(100vw-32px))] max-w-[min(420px,calc(100vw-32px))] rounded-[18px] border bg-background px-4 py-4 text-foreground shadow-lg [&_[data-content]]:ml-1.5 [&_[data-icon]]:shrink-0",
           title: "text-sm font-medium leading-snug",
           description: "text-[13px] leading-snug text-muted-foreground",
           success:

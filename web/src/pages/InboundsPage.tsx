@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Copy, Eye, EyeOff } from "lucide-react";
+import {
+  Check,
+  Copy,
+  Eye,
+  EyeOff,
+  Pencil,
+  Trash,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -35,6 +42,7 @@ import {
   type InboundProtocol,
   type InboundStatus,
   type InboundView,
+  type LocalMachine,
   type NodeView,
   type RealityParams,
   type ShadowsocksParams,
@@ -49,6 +57,23 @@ function randomHex(bytes: number): string {
   const a = new Uint8Array(bytes);
   crypto.getRandomValues(a);
   return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+// Row action trigger style, verbatim mirror of the SubscriptionsPage
+// RowActions baseline (the screenshot style): borderless 32px icon
+// button, muted icon, muted hover background. Disabled triggers add
+// opacity-50 for affordance.
+const ICON_BTN_CLS =
+  "flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+
+// 本机 dropdown label, mirroring the node rows' name（address） format.
+// Partial data still beats the bare fallback: hostname alone, or
+// hostname（ip）, when the port or IP is unavailable.
+function formatLocalLabel(lm: LocalMachine): string {
+  if (!lm.hostname) return "本机";
+  if (lm.ip && lm.port > 0) return `${lm.hostname}（${lm.ip}:${lm.port}）`;
+  if (lm.ip) return `${lm.hostname}（${lm.ip}）`;
+  return lm.hostname;
 }
 
 function StatusBadge({
@@ -71,7 +96,14 @@ function StatusBadge({
     pending: ["未同步", "bg-muted text-muted-foreground"],
     unknown: ["无法对照", "bg-muted text-muted-foreground"],
     disabled: ["已停用", "bg-muted text-muted-foreground"],
-    remote: ["仅节点", "bg-muted text-muted-foreground"],
+    not_listening: [
+      "未监听",
+      showWarnings
+        ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
+        : "bg-muted text-muted-foreground",
+    ],
+    paused: ["已暂停", "bg-amber-500/10 text-amber-600 dark:text-amber-400"],
+    offline: ["离线", "bg-muted text-muted-foreground"],
   } as const;
   const [label, cls] = map[status];
   return (
@@ -319,7 +351,10 @@ export default function InboundsPage({
   }
 
   const outOfSync = list.items.filter(
-    (v) => v.status === "pending" || v.status === "drifted",
+    (v) =>
+      v.status === "pending" ||
+      v.status === "drifted" ||
+      v.status === "not_listening",
   ).length;
 
   return (
@@ -330,17 +365,17 @@ export default function InboundsPage({
       ) : (
         <>
       {showWarnings && !list.runningAvailable && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-700 dark:text-amber-300">
+        <div className="rounded-[18px] border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-700 dark:text-amber-300">
           无法读取核心的运行配置，本页仅显示面板记录，同步状态不可用。
         </div>
       )}
       {showWarnings && list.runningAvailable && outOfSync > 0 && (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-700 dark:text-amber-300">
+        <div className="rounded-[18px] border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-700 dark:text-amber-300">
           有 {outOfSync} 个入站与运行配置不一致 — 面板记录是期望状态，点顶栏的同步图标应用。
         </div>
       )}
       {list.extras.length > 0 && (
-        <div className="rounded-xl border bg-card px-4 py-3 text-[13px] text-muted-foreground shadow-sm">
+        <div className="rounded-[18px] border bg-card px-4 py-3 text-[13px] text-muted-foreground shadow-sm">
           核心正在运行、但面板尚未纳管的入站：
           {list.extras
             .map((e) => `${e.tag || e.type}（${e.type}:${e.port}）`)
@@ -348,7 +383,7 @@ export default function InboundsPage({
         </div>
       )}
 
-      <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+      <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
         <div className="flex items-center justify-between">
           <p className="text-base font-semibold">入站列表</p>
           <Button
@@ -400,27 +435,32 @@ export default function InboundsPage({
                       v.diffs.length > 0 && <DiffsList diffs={v.diffs} />}
                   </td>
                   <td className="py-2.5">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-1">
                       <EnabledSwitch
                         enabled={v.enabled}
                         disabled={busyId === v.id}
                         onToggle={() => toggleEnabled(v)}
                       />
-                      <Button
+                      <button
+                        type="button"
+                        title="编辑"
+                        aria-label="编辑"
                         disabled={busyId === v.id}
                         onClick={() => setDialogItem(v)}
-                        className="h-8 rounded-xl px-3"
+                        className={`${ICON_BTN_CLS} disabled:opacity-50`}
                       >
-                        编辑
-                      </Button>
-                      <Button
-                        variant="destructive"
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        title="删除"
+                        aria-label="删除"
                         disabled={busyId === v.id}
                         onClick={() => setPendingDelete(v)}
-                        className="h-8 rounded-xl px-3"
+                        className={`${ICON_BTN_CLS} disabled:opacity-50`}
                       >
-                        删除
-                      </Button>
+                        <Trash className="h-4 w-4" />
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -549,25 +589,32 @@ function InboundFormDialog({
   const [formError, setFormError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  // Local run switch + remote node assignment. Local is no longer
-  // implicit: runLocal off means the local machine skips this inbound.
-  const [runLocal, setRunLocal] = useState(
-    creating ? true : (item?.runLocal ?? true),
-  );
+  // One inbound runs on exactly ONE machine: 本机 (local) or one node.
+  // `machine` is "local", "node:<id>", or "" while the stored value is
+  // still being resolved (edit only; "" preserves stored assignments).
   const [nodes, setNodes] = useState<NodeView[]>([]);
-  const [selectedNodes, setSelectedNodes] = useState<Set<number>>(new Set());
-  const [initialNodes, setInitialNodes] = useState<Set<number>>(new Set());
-  // Per-node port override input text: "" = use the inbound's port.
-  const [nodePorts, setNodePorts] = useState<Map<number, string>>(new Map());
-  const [initialNodePorts, setInitialNodePorts] = useState<Map<number, number>>(
-    new Map(),
+  // 本机 row label: hostname + (IP:port) once loaded, plain 本机 until
+  // then (and forever if the endpoint fails — the form never breaks).
+  const [localLabel, setLocalLabel] = useState("本机");
+  const [machine, setMachine] = useState<string>(
+    creating ? "local" : item?.runLocal ? "local" : "",
   );
-  // Live occupancy hints per node (from the check-port proxy).
-  const [portHints, setPortHints] = useState<Map<number, string>>(new Map());
+  // Stored assignments (for the multi-machine note + changed detection).
+  const [initialAssignments, setInitialAssignments] = useState<
+    InboundNodeAssignment[]
+  >([]);
+  const [assignmentsLoaded, setAssignmentsLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      // Best effort: a failed fetch keeps the plain 本机 label.
+      try {
+        const lm = await api.localMachine();
+        if (!cancelled) setLocalLabel(formatLocalLabel(lm));
+      } catch {
+        // Keep the fallback label; the form must never break on this.
+      }
       try {
         const list = await api.nodes.list();
         if (cancelled) return;
@@ -575,17 +622,21 @@ function InboundFormDialog({
         if (!creating && item) {
           const res = await api.nodes.getInboundNodes(item.id);
           if (cancelled) return;
-          const s = new Set(res.nodeIds);
-          const ports = new Map<number, string>();
-          const initPorts = new Map<number, number>();
-          for (const a of res.nodes ?? []) {
-            initPorts.set(a.nodeId, a.port);
-            if (a.port > 0) ports.set(a.nodeId, String(a.port));
+          const assigns = res.nodes ?? [];
+          setInitialAssignments(assigns);
+          setAssignmentsLoaded(true);
+          if (item.runLocal) {
+            setMachine("local");
+          } else if (assigns.length > 0) {
+            const first = assigns[0].nodeId;
+            // Fallback to 本机 when the stored node is gone (e.g. deleted).
+            setMachine(
+              list.some((n) => n.id === first) ? `node:${first}` : "local",
+            );
+          } else {
+            // No machine stored at all → default to 本机.
+            setMachine("local");
           }
-          setSelectedNodes(s);
-          setInitialNodes(s);
-          setNodePorts(ports);
-          setInitialNodePorts(initPorts);
         }
       } catch {
         if (!cancelled) setNodes([]);
@@ -595,52 +646,6 @@ function InboundFormDialog({
       cancelled = true;
     };
   }, [creating, item]);
-
-  // Live per-node occupancy hints, debounced. The effective port is
-  // the override, or the inbound's port when the input is empty.
-  useEffect(() => {
-    if (nodes.length === 0 || selectedNodes.size === 0) {
-      setPortHints(new Map());
-      return;
-    }
-    const transport =
-      protocol === "hysteria2" || protocol === "tuic"
-        ? "udp"
-        : protocol === "shadowsocks"
-          ? "both"
-          : "tcp";
-    let cancelled = false;
-    const timer = setTimeout(() => {
-      (async () => {
-        const next = new Map<number, string>();
-        for (const id of selectedNodes) {
-          const raw = (nodePorts.get(id) ?? "").trim();
-          const effective = raw === "" ? port : Number(raw);
-          if (
-            !Number.isInteger(effective) ||
-            effective < 1 ||
-            effective > 65535
-          ) {
-            next.set(id, "端口无效");
-            continue;
-          }
-          try {
-            const chk = await api.nodes.checkPort(id, effective, transport);
-            if (cancelled) return;
-            next.set(id, chk.occupied ? `已被占用：${chk.reason}` : "可用");
-          } catch {
-            if (cancelled) return;
-            next.set(id, "无法查询（保存时会再拦）");
-          }
-        }
-        if (!cancelled) setPortHints(next);
-      })();
-    }, 500);
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [nodes, selectedNodes, nodePorts, port, protocol]);
 
   const copyPublicKey = async () => {
     try {
@@ -710,34 +715,36 @@ function InboundFormDialog({
     }
   };
 
+  // Edit only: is the stored inbound on multiple machines? (run_local +
+  // assignments, or several assignments.) Saving collapses it to the one
+  // machine picked in the dropdown.
+  let multiMachine = false;
+  if (!creating && item && assignmentsLoaded) {
+    multiMachine =
+      (item.runLocal && initialAssignments.length > 0) ||
+      initialAssignments.length > 1;
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
     setSubmitting(true);
     try {
       const params = buildParams();
-      if (!runLocal && selectedNodes.size === 0) {
-        setFormError(
-          "主服务器关了，又没选节点，这个入站哪都不跑：请至少选一个节点，或打开主服务器开关。",
-        );
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        setFormError("端口无效（1-65535）");
         return;
       }
-      // Per-node ports: empty = the inbound's port (0); anything else
-      // must be a valid port, or the save stops here.
-      const assignments: InboundNodeAssignment[] = [];
-      for (const id of selectedNodes) {
-        const raw = (nodePorts.get(id) ?? "").trim();
-        if (raw === "") {
-          assignments.push({ nodeId: id, port: 0 });
-          continue;
-        }
-        const p = Number(raw);
-        if (!Number.isInteger(p) || p < 1 || p > 65535) {
-          setFormError("节点端口无效（1-65535，留空则用入站端口）");
-          return;
-        }
-        assignments.push({ nodeId: id, port: p });
-      }
+      // "" means the stored machine never resolved (fetch failed): keep
+      // the stored runLocal and touch no assignments.
+      const runLocal =
+        machine === "" ? (item?.runLocal ?? true) : machine === "local";
+      const nodeId = machine.startsWith("node:")
+        ? Number(machine.slice(5))
+        : null;
+      // The single port box is the port on the one selected machine.
+      const assignments: InboundNodeAssignment[] =
+        nodeId !== null ? [{ nodeId, port }] : [];
       let inboundId: number;
       if (creating) {
         const created = await api.inbounds.create({
@@ -759,18 +766,28 @@ function InboundFormDialog({
         inboundId = item.id;
         toast.success("入站已保存");
       }
-      const changed =
-        selectedNodes.size !== initialNodes.size ||
-        [...selectedNodes].some((id) => !initialNodes.has(id)) ||
-        [...selectedNodes].some(
-          (id) =>
-            (initialNodePorts.get(id) ?? 0) !==
-            (assignments.find((a) => a.nodeId === id)?.port ?? 0),
-        );
-      // Edit: save only when the assignment changed (empty = unassign all).
-      // Create: save only when at least one node is picked (default = local only).
-      if ((!creating && changed) || (creating && selectedNodes.size > 0)) {
-        await api.nodes.setInboundNodes(inboundId, assignments);
+      // Create: save assignments only when a node is picked (local needs none).
+      // Edit: save only when the assignment set actually changed, so an
+      // unrelated edit never fails on an unreachable node. Stored port 0
+      // means "the inbound's port", so it normalizes to item.port.
+      // Skipped entirely when assignments never loaded (preserves them).
+      if (creating) {
+        if (assignments.length > 0) {
+          await api.nodes.setInboundNodes(inboundId, assignments);
+        }
+      } else if (assignmentsLoaded) {
+        const normalize = (list: InboundNodeAssignment[]) =>
+          new Map(
+            list.map((a) => [a.nodeId, a.port > 0 ? a.port : item.port]),
+          );
+        const oldMap = normalize(initialAssignments);
+        const newMap = normalize(assignments);
+        const changed =
+          oldMap.size !== newMap.size ||
+          [...newMap].some(([id, p]) => oldMap.get(id) !== p);
+        if (changed) {
+          await api.nodes.setInboundNodes(inboundId, assignments);
+        }
       }
       await onSaved();
     } catch (err) {
@@ -793,7 +810,7 @@ function InboundFormDialog({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {showWarnings && !creating && item.status === "drifted" && item.diffs && item.diffs.length > 0 && (
-            <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3">
+            <div className="rounded-[18px] border border-amber-500/40 bg-amber-500/10 px-4 py-3">
               <p className="text-[13px] font-medium text-amber-700 dark:text-amber-300">
                 与运行配置不一致
               </p>
@@ -823,43 +840,55 @@ function InboundFormDialog({
               </div>
             </div>
           )}
-          <div className="grid gap-4 sm:grid-cols-[1fr_140px]">
-            <div className="space-y-2">
-              <Label htmlFor="inb-name">名称</Label>
-              <Input
-                id="inb-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="例如：主线 VLESS"
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="inb-port">端口</Label>
-              <Input
-                id="inb-port"
-                type="number"
-                min={1}
-                max={65535}
-                value={port}
-                onChange={(e) => setPort(Number(e.target.value))}
-                required
-              />
-            </div>
+          <div className="space-y-2">
+            <Label htmlFor="inb-name">名称</Label>
+            <Input
+              id="inb-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="例如：主线 VLESS"
+              required
+            />
           </div>
 
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={runLocal}
-                onChange={(e) => setRunLocal(e.target.checked)}
-              />
-              主服务器也跑这个入站
-            </label>
+            <Label>运行机器</Label>
+            <Select value={machine} onValueChange={setMachine}>
+              <SelectTrigger>
+                <SelectValue placeholder="选择机器" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="local">{localLabel}</SelectItem>
+                {nodes.map((n) => (
+                  <SelectItem key={n.id} value={`node:${n.id}`}>
+                    {n.name}（{n.address}）
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
             <p className="text-xs text-muted-foreground">
-              关掉后，主服务器不跑这个入站，只跑在下面勾选的节点上。
+              {nodes.length === 0
+                ? "还没有节点，先去「节点」页添加。"
+                : "选中的机器会跑这个入站，订阅里会出现这台机器的入口。"}
             </p>
+            {multiMachine && (
+              <p className="text-xs text-muted-foreground">
+                这个入站现在跑在多台机器上，保存后将只留选中的一台
+              </p>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="inb-port">端口</Label>
+            <Input
+              id="inb-port"
+              type="number"
+              min={1}
+              max={65535}
+              value={port}
+              onChange={(e) => setPort(Number(e.target.value))}
+              required
+            />
           </div>
 
           {protocol === "vless-reality" && (
@@ -1255,74 +1284,6 @@ function InboundFormDialog({
               </p>
             </>
           )}
-
-          <div className="space-y-2">
-            <Label>远程节点</Label>
-            {nodes.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                还没有节点，先去「节点」页添加。主服务器那条由上面的开关控制。
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {nodes.map((n) => {
-                  const checked = selectedNodes.has(n.id);
-                  const hint = portHints.get(n.id);
-                  return (
-                    <div key={n.id} className="space-y-1">
-                      <div className="flex items-center gap-2 text-sm">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) => {
-                            const next = new Set(selectedNodes);
-                            if (e.target.checked) {
-                              next.add(n.id);
-                            } else {
-                              next.delete(n.id);
-                            }
-                            setSelectedNodes(next);
-                          }}
-                        />
-                        <span className="min-w-0 flex-1 truncate">
-                          {n.name}（{n.address}）
-                        </span>
-                        <Input
-                          type="number"
-                          min={1}
-                          max={65535}
-                          value={nodePorts.get(n.id) ?? ""}
-                          onChange={(e) => {
-                            const next = new Map(nodePorts);
-                            next.set(n.id, e.target.value);
-                            setNodePorts(next);
-                          }}
-                          placeholder={`同入站端口 ${port}`}
-                          disabled={!checked}
-                          className="h-7 w-32"
-                        />
-                      </div>
-                      {checked && hint && (
-                        <p
-                          className={cn(
-                            "pl-6 text-xs",
-                            hint.startsWith("已被占用")
-                              ? "text-destructive"
-                              : "text-muted-foreground",
-                          )}
-                        >
-                          {hint}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-                <p className="text-xs text-muted-foreground">
-                  勾选的节点会收到这个入站的推送，订阅里也会出现该节点的入口。端口留空
-                  = 用入站端口。
-                </p>
-              </div>
-            )}
-          </div>
 
           {formError && (
             <p className="text-[13px] text-destructive">{formError}</p>

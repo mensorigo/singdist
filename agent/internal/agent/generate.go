@@ -56,6 +56,16 @@ func generate(desired []Inbound, publicHost string, cert *Cert, logPath, clashAd
 	return doc, hex.EncodeToString(sum[:]), nil
 }
 
+// coreUserName mirrors the panel's coresync rule: a subscription on
+// a password-protocol inbound is a distinct sing-box core user per
+// (subscription, inbound), because sing-box rejects the same core
+// username with two different passwords across inbounds (the
+// hysteria2 + trojan template case). Keep this identical to the
+// panel's helper; the two modules cannot import each other.
+func coreUserName(subName, inboundName string) string {
+	return subName + "-" + inboundName
+}
+
 func genInbound(ib Inbound, publicHost string, cert *Cert) (map[string]any, error) {
 	base := map[string]any{
 		"tag":         ib.Name,
@@ -79,7 +89,7 @@ func genInbound(ib Inbound, publicHost string, cert *Cert) (map[string]any, erro
 	passwordUsers := func(password string) []any {
 		users := []any{}
 		for _, u := range ib.Users {
-			users = append(users, map[string]any{"name": u.Name, "password": password})
+			users = append(users, map[string]any{"name": coreUserName(u.Name, ib.Name), "password": password})
 		}
 		return users
 	}
@@ -131,7 +141,7 @@ func genInbound(ib Inbound, publicHost string, cert *Cert) (map[string]any, erro
 		base["type"] = "tuic"
 		users := []any{}
 		for _, u := range ib.Users {
-			users = append(users, map[string]any{"name": u.Name, "uuid": u.UUID, "password": p.Password})
+			users = append(users, map[string]any{"name": coreUserName(u.Name, ib.Name), "uuid": u.UUID, "password": p.Password})
 		}
 		base["users"] = users
 		congestion := p.CongestionControl
@@ -156,7 +166,14 @@ func genInbound(ib Inbound, publicHost string, cert *Cert) (map[string]any, erro
 		var p passwordSNIParams
 		_ = json.Unmarshal(ib.Params, &p)
 		base["type"] = "trojan"
-		base["users"] = passwordUsers(p.Password)
+		// Mirrors the panel: trojan identifies users by
+		// password, so one user per inbound, named after the
+		// inbound, when at least one pushed user exists.
+		if len(ib.Users) > 0 {
+			base["users"] = []any{map[string]any{"name": ib.Name, "password": p.Password}}
+		} else {
+			base["users"] = []any{}
+		}
 		base["tls"] = tlsCert(p.SNI, nil)
 	default:
 		// Validation rejects unknown protocols before generation,

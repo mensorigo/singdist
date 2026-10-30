@@ -22,6 +22,7 @@ import (
 	"singbox-ui/server/internal/dash"
 	"singbox-ui/server/internal/httpx"
 	"singbox-ui/server/internal/inbounds"
+	"singbox-ui/server/internal/localmachine"
 	"singbox-ui/server/internal/logs"
 	"singbox-ui/server/internal/nodes"
 	"singbox-ui/server/internal/render"
@@ -29,6 +30,7 @@ import (
 	"singbox-ui/server/internal/store"
 	"singbox-ui/server/internal/subs"
 	"singbox-ui/server/internal/templates"
+	"singbox-ui/server/internal/traffic"
 )
 
 type config struct {
@@ -215,6 +217,13 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	nodesHandler := nodes.NewHandler(nodesSvc)
 	go nodesPusher.Start(ctx)
 
+	// Local traffic collector: same Clash+log matching as the
+	// node agent, for the local core. Totals persist to a JSON
+	// file in the data dir, not a new table.
+	localTraffic := traffic.New(cfg.clashAPI, st, filepath.Join(cfg.dataDir, "traffic.json"))
+	go localTraffic.Run(ctx)
+	trafficHandler := traffic.NewHandler(traffic.NewSummaryService(st, nodesSvc, localTraffic))
+
 	// --- auto-sync: debouncer + drift poll ---------------------------
 	// Two pieces, one decision point (the debouncer):
 	//   - The debouncer decides WHEN to push: 5s quiet after the
@@ -362,6 +371,7 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	engine.Use(logs.AuditMiddleware(st, log, filepath.Join(cfg.dataDir, "logs"), debouncer.Notify))
 	authHandler := auth.NewHandler(authSvc)
 	dashHandler := dash.NewHandler(sampler)
+	localHandler := localmachine.NewHandler(cfg.addr)
 	logsSvc := logs.NewService(st, filepath.Join(cfg.dataDir, "logs", "sing-box.log"), log)
 	// Log following: the panel-managed core log file is ingested into
 	// core_logs, so the Logs page serves indexed SELECTs.
@@ -375,6 +385,7 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	protected.Use(httpx.AuthGuard(authSvc, auth.CookieName))
 	authHandler.RegisterProtected(protected)
 	dashHandler.RegisterProtected(protected)
+	localHandler.RegisterProtected(protected)
 	certHandler.RegisterProtected(protected)
 	inboundHandler.RegisterProtected(protected)
 	subsHandler.RegisterProtected(protected)
@@ -384,6 +395,7 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	syncHandler.RegisterProtected(protected)
 	nodesHandler.RegisterProtected(protected)
 	logsHandler.RegisterProtected(protected)
+	trafficHandler.RegisterProtected(protected)
 
 	subPublic := engine.Group("")
 	renderHandler.RegisterPublic(subPublic)

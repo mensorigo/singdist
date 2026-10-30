@@ -413,7 +413,7 @@ def s4b_hy2_divergent(p):
 
     def edit(doc):
         for u in target_inbound(doc, "H4b")["users"]:
-            if u["name"] == "SUB4b1":
+            if u["name"] == "SUB4b1-H4b":
                 u["password"] = "pw-1"
     edit_target(edit)
     row = p.sync()
@@ -423,7 +423,7 @@ def s4b_hy2_divergent(p):
     users = {u["name"]: u["password"]
              for u in target_inbound(read_target(), "H4b")["users"]}
     check("S4b", "divergent override dropped, panel password for all",
-          users.get("SUB4b1") == "pw-old" and users.get("SUB4b2") == "pw-old", str(users))
+          users.get("SUB4b1-H4b") == "pw-old" and users.get("SUB4b2-H4b") == "pw-old", str(users))
     check("S4b", "divergent reverted row",
           bool(change(p.changes_for(row["id"]), "reverted", "inbounds[H4b].users")))
 
@@ -1193,7 +1193,7 @@ def s0g_steady_state_silent(p):
 
     def edit(doc):
         for u in target_inbound(doc, "H0g")["users"]:
-            if u["name"] == "SUB0g1":
+            if u["name"] == "SUB0g1-H0g":
                 u["password"] = "pw-1"
     edit_target(edit)
     row1 = p.sync()
@@ -1203,7 +1203,7 @@ def s0g_steady_state_silent(p):
     users = {u["name"]: u["password"]
              for u in target_inbound(read_target(), "H0g")["users"]}
     check("S0g", "target users reverted to panel password",
-          users.get("SUB0g1") == "pw-old" and users.get("SUB0g2") == "pw-old", str(users))
+          users.get("SUB0g1-H0g") == "pw-old" and users.get("SUB0g2-H0g") == "pw-old", str(users))
     row2 = p.sync()
     check("S0g", "second sync no_change", row2["result"] == "no_change", str(row2))
     check("S0g", "no duplicate rows on steady state",
@@ -1387,6 +1387,37 @@ def s31_mixed_revert_preserve(p):
           bool(change(rows, "passthrough", "route")), str(rows))
 
 
+def s32_password_protocols_share_sub(p):
+    # Prod fault 2026-10-30: one template with hysteria2 + trojan,
+    # different inbound passwords, same subscriptions. Before the
+    # per-(subscription, inbound) core username rename, the real
+    # sing-box check rejected this ("user already exists"); the
+    # fake checker here only parses JSON, so this scenario asserts
+    # the renamed users themselves, not the real check.
+    h = p.mk_inbound("H32", "hysteria2", 24900,
+                     {"password": "hy2-pw-32", "obfs": "", "obfsPassword": "",
+                      "upMbps": 0, "downMbps": 0})
+    tj = p.mk_inbound("T32", "trojan", 24901,
+                      {"password": "trojan-pw-32", "sni": "t32.example.com"})
+    t = p.mk_template("T32", [h["id"], tj["id"]])
+    p.mk_sub("SUB32", t["id"])
+    p.mk_sub("SUB32b", t["id"])
+    row = p.sync()
+    check("S32", "mixed password protocols sync applied", row["result"] == "applied", str(row))
+    doc = read_target()
+    hy = {u["name"]: u["password"] for u in target_inbound(doc, "H32")["users"]}
+    tr = {u["name"]: u["password"] for u in target_inbound(doc, "T32")["users"]}
+    check("S32", "hy2 core usernames distinct per inbound",
+          hy.get("SUB32-H32") == "hy2-pw-32" and hy.get("SUB32b-H32") == "hy2-pw-32",
+          f"hy={hy}")
+    check("S32", "trojan single core user (password-identified, not per-sub)",
+          tr == {"T32": "trojan-pw-32"}, f"tr={tr}")
+    check("S32", "no plain subscription core username left",
+          "SUB32" not in hy and "SUB32" not in tr, f"hy={hy} tr={tr}")
+    row2 = p.sync()
+    check("S32", "second sync no_change", row2["result"] == "no_change", str(row2))
+
+
 SCENARIOS = [
     ("S0", s0_panel_only, 0), ("S0b", s0b_panel_password_kept, 0),
     ("S0c", s0c_panel_rename_kept, 0), ("S0d", s0d_panel_host_kept, 0),
@@ -1411,6 +1442,7 @@ SCENARIOS = [
     ("S26", s26_check_fallback, 0), ("S27", s27_idempotency, 0),
     ("S28", s28_first_import, 0), ("S29", s29_extra_field_dropped, 0),
     ("S30", s30_ss_custom_method_api, 0), ("S31", s31_mixed_revert_preserve, 0),
+    ("S32", s32_password_protocols_share_sub, 0),
 ]
 
 

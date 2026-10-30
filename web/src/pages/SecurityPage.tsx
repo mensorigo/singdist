@@ -18,7 +18,7 @@ function SectionCard({
   children: ReactNode;
 }) {
   return (
-    <section className="rounded-xl border bg-card px-5 py-4 text-card-foreground shadow-sm">
+    <section className="rounded-[18px] border bg-card px-5 py-4 text-card-foreground shadow-sm">
       <div className="flex items-center gap-2.5">
         <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           {icon}

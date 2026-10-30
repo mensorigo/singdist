@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -22,11 +23,14 @@ func (h *Handler) RegisterProtected(rg *gin.RouterGroup) {
 	rg.GET("/nodes", h.list)
 	rg.POST("/nodes", h.create)
 	rg.GET("/nodes/:id", h.get)
+	rg.POST("/nodes/request-pairing-code", h.requestPairingCode)
 	rg.PATCH("/nodes/:id", h.update)
 	rg.DELETE("/nodes/:id", h.remove)
 	rg.POST("/nodes/:id/push", h.pushNow)
 	rg.POST("/nodes/:id/clear-block", h.clearBlock)
 	rg.GET("/nodes/:id/status", h.probeStatus)
+	rg.GET("/nodes/:id/import-scan", h.scanImport)
+	rg.POST("/nodes/:id/import", h.importInbounds)
 	rg.GET("/inbounds/:id/nodes", h.getInboundNodes)
 	rg.PATCH("/inbounds/:id/nodes", h.setInboundNodes)
 	rg.GET("/nodes/:id/check-port", h.checkNodePort)
@@ -53,6 +57,25 @@ func (h *Handler) create(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, v)
+}
+
+// requestPairingCode asks the agent to generate a pairing code.
+// The response carries only ok/retry_after: the code itself goes
+// to the agent log and is never returned here.
+func (h *Handler) requestPairingCode(c *gin.Context) {
+	var req struct {
+		Address string `json:"address"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with address")
+		return
+	}
+	ok, retry, err := h.svc.RequestPairingCode(c.Request.Context(), req.Address)
+	if err != nil {
+		failErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": ok, "retry_after": retry})
 }
 
 func (h *Handler) get(c *gin.Context) {
@@ -83,6 +106,16 @@ func (h *Handler) update(c *gin.Context) {
 		failErr(c, err)
 		return
 	}
+	// A pause toggle gets a readable audit summary; other edits keep
+	// the default (no summary). The middleware only uses this on
+	// success, so a failed toggle leaves no stale summary behind.
+	if req.Paused != nil {
+		if *req.Paused {
+			c.Set("auditSummary", "暂停节点")
+		} else {
+			c.Set("auditSummary", "启用节点")
+		}
+	}
 	c.JSON(http.StatusOK, v)
 }
 
@@ -91,12 +124,33 @@ func (h *Handler) remove(c *gin.Context) {
 	if !ok {
 		return
 	}
-	warning, err := h.svc.Delete(c.Request.Context(), id)
+	res, err := h.svc.Delete(c.Request.Context(), id)
 	if err != nil {
 		failErr(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "warning": warning})
+	// Panel-only delete: nothing was pushed and nothing on the node
+	// was stopped, so there is no warning. The summary names what
+	// the panel actually removed (assignments + single-machine
+	// inbounds); the audit middleware never sees request bodies, so
+	// no token can leak through it.
+	summary := fmt.Sprintf("分派 %d 个", res.Assignments)
+	if len(res.DeletedInbounds) > 0 {
+		summary += "，单机入站删除：" + joinNames(res.DeletedInbounds)
+	}
+	c.Set("auditSummary", summary)
+	c.JSON(http.StatusOK, gin.H{"ok": true, "warning": ""})
+}
+
+func joinNames(names []string) string {
+	out := ""
+	for i, n := range names {
+		if i > 0 {
+			out += "、"
+		}
+		out += n
+	}
+	return out
 }
 
 func (h *Handler) pushNow(c *gin.Context) {
@@ -123,6 +177,39 @@ func (h *Handler) clearBlock(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"cleared": cleared, "pushStarted": started})
+}
+
+func (h *Handler) scanImport(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	res, err := h.svc.ScanImport(c.Request.Context(), id)
+	if err != nil {
+		failErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
+}
+
+func (h *Handler) importInbounds(c *gin.Context) {
+	id, ok := pathID(c)
+	if !ok {
+		return
+	}
+	var req struct {
+		Names []string `json:"names"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		apix.Fail(c, http.StatusBadRequest, "invalid_request", "request body must be JSON with names")
+		return
+	}
+	res, err := h.svc.ImportInbounds(c.Request.Context(), id, req.Names)
+	if err != nil {
+		failErr(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 func (h *Handler) probeStatus(c *gin.Context) {

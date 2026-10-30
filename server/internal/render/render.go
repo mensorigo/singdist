@@ -166,9 +166,10 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 		}
 		add(name, n)
 	}
-	// Remote nodes: one endpoint per (online node, assigned inbound in
-	// this template). The name is node-first, matching the local
-	// prefix-first convention; the shared usedNames map means a local
+	// Remote nodes: one endpoint per (online, unpaused node, assigned inbound in
+	// this template). Paused nodes are excluded even when online: pausing
+	// only hides them from subscriptions, it deletes nothing. The name
+	// is node-first, matching the local prefix-first convention; the shared usedNames map means a local
 	// name can never collide with a remote name in one subscription.
 	// Credentials are identical to local (one subscription UUID works
 	// on every node); only the server address changes.
@@ -192,7 +193,7 @@ func (s *Service) buildAllNodes(ctx context.Context, sub store.SubscriptionRow, 
 		}
 		now := time.Now().Unix()
 		for _, rn := range remoteNodes {
-			if !rn.Online(now) {
+			if rn.Paused || !rn.Online(now) {
 				continue
 			}
 			assigned := byNode[rn.ID]

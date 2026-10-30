@@ -27,6 +27,13 @@ function formatDateTime(unix: number): string {
   return new Date(unix * 1000).toLocaleString("zh-CN", { hour12: false });
 }
 
+// Row action trigger style, verbatim mirror of the SubscriptionsPage
+// RowActions baseline (the screenshot style): borderless 32px icon
+// button, muted icon, muted hover background. Disabled triggers add
+// opacity-50 for affordance.
+const ICON_BTN_CLS =
+  "flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
+
 function formatDate(unix: number): string {
   if (!unix) return "—";
   return new Date(unix * 1000).toLocaleDateString("zh-CN");
@@ -196,7 +203,7 @@ export default function CertificatesPage({
       )}
 
       {/* Current certificate */}
-      <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+      <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
         <p className="text-base font-semibold">当前证书</p>
         {active ? (
           <div className="mt-4 space-y-5">
@@ -261,7 +268,7 @@ export default function CertificatesPage({
       </section>
 
       {/* Versions */}
-      <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+      <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
         <p className="text-base font-semibold">证书版本</p>
         {actionError && (
           <p className="mt-2 text-[13px] text-destructive">{actionError}</p>
@@ -350,29 +357,27 @@ export default function CertificatesPage({
                   </td>
                   <td className="py-2.5">
                     {!v.active && (
-                      <div className="flex items-center gap-3">
-                        <Button
-                          size="icon"
-                          variant="ghost"
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
                           title="启用"
                           aria-label="启用"
                           disabled={busyId === v.id}
                           onClick={() => void handleActivate(v)}
-                          className="h-8 w-8"
+                          className={`${ICON_BTN_CLS} disabled:opacity-50`}
                         >
                           <ArrowLeftRight className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
+                        </button>
+                        <button
+                          type="button"
                           title="删除"
                           aria-label="删除"
                           disabled={busyId === v.id}
                           onClick={() => handleDelete(v)}
-                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          className={`${ICON_BTN_CLS} disabled:opacity-50`}
                         >
                           <Trash className="h-4 w-4" />
-                        </Button>
+                        </button>
                       </div>
                     )}
                   </td>
@@ -531,7 +536,7 @@ function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void> }) {
   }
 
   return (
-    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+    <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <p className="text-base font-semibold">生成自签名证书</p>
       <p className="mt-1 text-[13px] text-muted-foreground">
         按你当前访问面板的地址（域名或 IP）一键生成一张自签名证书，有效期
@@ -589,7 +594,7 @@ function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) {
   }
 
   return (
-    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+    <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <p className="text-base font-semibold">上传新证书</p>
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
         <div className="grid gap-4 md:grid-cols-2">

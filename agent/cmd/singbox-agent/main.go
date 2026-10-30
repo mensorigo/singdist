@@ -17,6 +17,15 @@
 //	SINGBOX_AGENT_LOCAL_INBOUNDS  optional local inbounds file path
 //	SINGBOX_AGENT_TLS_CERT/KEY    management TLS cert/key (default: auto self-signed)
 //	SINGBOX_AGENT_TLS_OFF         "1" serves plain HTTP (tests/dev only)
+//	SINGBOX_AGENT_ENV_FILE        env file whose SINGBOX_AGENT_TOKEN= line a
+//	                              successful pairing keeps in sync (optional)
+//
+// Token resolution at startup: <dataDir>/agent-token wins over
+// SINGBOX_AGENT_TOKEN. When neither exists the agent starts unpaired
+// and prints one pairing code to the log (valid 5 minutes,
+// one-time); a token-holding agent never auto-generates a code on
+// restart. Run `singbox-agent pair-code` (no service start) to
+// generate a fresh code on demand from the node terminal.
 package main
 
 import (
@@ -51,13 +60,33 @@ func addrPort(addr string) int {
 
 func main() {
 	logger := log.New(os.Stderr, "agent: ", log.LstdFlags)
-	token := os.Getenv("SINGBOX_AGENT_TOKEN")
-	if token == "" {
-		logger.Fatal("SINGBOX_AGENT_TOKEN is required")
+	// pair-code is an operator command, not a service start: it
+	// generates a fresh pairing code, prints it to stdout and exits.
+	// It needs no token and bypasses the HTTP 60-second interval
+	// (the operator is on the node itself), but it still invalidates
+	// any pending code. No-arg startup below is unchanged.
+	if len(os.Args) > 1 && os.Args[1] == "pair-code" {
+		dataDir := envOr("SINGBOX_AGENT_DATA_DIR", "./agent-data")
+		if err := os.MkdirAll(dataDir, 0o755); err != nil {
+			logger.Fatalf("create data dir: %v", err)
+		}
+		code, err := agent.NewPairingManager(dataDir).Generate()
+		if err != nil {
+			logger.Fatalf("generate pairing code: %v", err)
+		}
+		fmt.Println(code)
+		return
 	}
 	dataDir := envOr("SINGBOX_AGENT_DATA_DIR", "./agent-data")
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		logger.Fatalf("create data dir: %v", err)
+	}
+	// Token file wins over the environment token; neither means the
+	// agent starts unpaired (no fatal: pairing is how the first
+	// token is established).
+	token, err := agent.LoadToken(dataDir, os.Getenv("SINGBOX_AGENT_TOKEN"))
+	if err != nil {
+		logger.Fatalf("load token: %v", err)
 	}
 	addr := envOr("SINGBOX_AGENT_ADDR", ":32435")
 	unit := envOr("SINGBOX_AGENT_CORE_UNIT", "sing-box")
@@ -85,9 +114,22 @@ func main() {
 	srv := agent.NewServer(ag, token, addr,
 		os.Getenv("SINGBOX_AGENT_TLS_CERT"), os.Getenv("SINGBOX_AGENT_TLS_KEY"),
 		dataDir, os.Getenv("SINGBOX_AGENT_TLS_OFF") == "1", logger)
+	srv.SetEnvFile(os.Getenv("SINGBOX_AGENT_ENV_FILE"))
+	if token == "" {
+		// Unpaired startup: generate one pairing code and print it
+		// to the log (journal under systemd) for the operator to
+		// enter in the panel. A token-holding agent never reaches
+		// this branch, so restarts never auto-generate a code.
+		code, err := srv.Pairing().Generate()
+		if err != nil {
+			logger.Fatalf("generate pairing code: %v", err)
+		}
+		logger.Printf("no node token: pairing code (valid 5 minutes, one-time): %s", code)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	ag.StartTraffic(ctx)
 	unitDesc := unit
 	if unitDesc == "" {
 		unitDesc = "(no restart)"

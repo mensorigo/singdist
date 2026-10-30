@@ -167,6 +167,30 @@ func (s *Service) Generate(ctx context.Context) (doc []byte, hash string, err er
 	return doc, hex.EncodeToString(sum[:]), nil
 }
 
+// coreUserName is the sing-box core username for one subscription on
+// one password-protocol inbound. sing-box rejects the same core
+// username with two different passwords across inbounds, so a
+// subscription that appears on both hysteria2 and trojan (different
+// inbound passwords) used to make every local sync check-fail. The
+// suffix makes each (subscription, inbound) pair a distinct core
+// user while the client-facing subscription name and link stay
+// unchanged; clients of password protocols send only the password,
+// never this name. vless keeps the plain subscription name because
+// its identity is the UUID, which is already identical everywhere.
+// Trojan is the exception: it identifies users by password, so it
+// gets a single user per inbound (see the trojan case below), not
+// one per subscription; coreUserName for trojan is legacy only
+// (classify still recognises old renamed trojan users on transition).
+// The agent mirrors this rule in its own generate.go; keep them
+// in sync. (Hyphenated names could theoretically collide across
+// (sub, inbound) pairs, e.g. sub "a-b" + inbound "c" vs sub "a" +
+// inbound "b-c"; subscription and inbound names are user-chosen,
+// and no such pair exists in practice — the exact (sub, inbound)
+// map is what classify and the online-IP counts use, never parsing.)
+func coreUserName(subName, inboundName string) string {
+	return subName + "-" + inboundName
+}
+
 func (s *Service) genInbound(ib store.InboundRow, subs []store.SubscriptionRow, publicHost string, certPEM, keyPEM []byte) (map[string]any, error) {
 	base := map[string]any{
 		"tag":         ib.Name,
@@ -190,7 +214,7 @@ func (s *Service) genInbound(ib store.InboundRow, subs []store.SubscriptionRow, 
 	passwordUsers := func(password string) []any {
 		users := []any{}
 		for _, sub := range subs {
-			users = append(users, map[string]any{"name": sub.Name, "password": password})
+			users = append(users, map[string]any{"name": coreUserName(sub.Name, ib.Name), "password": password})
 		}
 		return users
 	}
@@ -242,7 +266,7 @@ func (s *Service) genInbound(ib store.InboundRow, subs []store.SubscriptionRow, 
 		base["type"] = "tuic"
 		users := []any{}
 		for _, sub := range subs {
-			users = append(users, map[string]any{"name": sub.Name, "uuid": sub.UUID, "password": p.Password})
+			users = append(users, map[string]any{"name": coreUserName(sub.Name, ib.Name), "uuid": sub.UUID, "password": p.Password})
 		}
 		base["users"] = users
 		congestion := p.CongestionControl
@@ -267,7 +291,20 @@ func (s *Service) genInbound(ib store.InboundRow, subs []store.SubscriptionRow, 
 		var p passwordSNIParams
 		_ = json.Unmarshal([]byte(ib.Params), &p)
 		base["type"] = "trojan"
-		base["users"] = passwordUsers(p.Password)
+		// Trojan identifies users by PASSWORD, not name: two
+		// entries sharing the inbound password fail the core
+		// check ("password used by 0"), so a trojan inbound
+		// gets exactly one user, named after the inbound
+		// itself, whenever at least one active subscription
+		// uses it. Trojan clients send only the password, so
+		// sharing one core user across subscriptions changes
+		// nothing client-side; per-subscription distinction
+		// for trojan was never real (shared password).
+		if len(subs) > 0 {
+			base["users"] = []any{map[string]any{"name": ib.Name, "password": p.Password}}
+		} else {
+			base["users"] = []any{}
+		}
 		base["tls"] = tlsCert(p.SNI, nil)
 	default:
 		return nil, nil

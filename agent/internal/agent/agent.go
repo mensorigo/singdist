@@ -59,10 +59,20 @@ type InboundState struct {
 // a concurrent push reports busy instead of queueing, like the
 // panel's whole-sync mutex).
 type Agent struct {
-	cfg    Config
-	engine *Engine
-	mu     sync.Mutex
-	state  *State
+	cfg     Config
+	engine  *Engine
+	mu      sync.Mutex
+	state   *State
+	traffic *trafficCollector
+}
+
+// StartTraffic begins the background traffic sampler (system
+// metrics are read on demand in Status, so they need no goroutine).
+// It is safe to call with a Clash address of "" or a missing log:
+// the sampler then simply records nothing.
+func (a *Agent) StartTraffic(ctx context.Context) {
+	a.traffic = newTrafficCollector(a.cfg.ClashAddr, a.cfg.LogPath, filepath.Join(a.cfg.DataDir, "traffic.json"))
+	go a.traffic.Run(ctx)
 }
 
 func New(cfg Config) (*Agent, error) {
@@ -334,19 +344,24 @@ func (a *Agent) mergeWithTarget(desiredDoc []byte, desiredHash string, targetByt
 
 // Status is the agent's live report for the central panel.
 type Status struct {
-	UnitActive  string         `json:"unitActive"` // active|failed|inactive|activating|unknown|"" (no unit)
-	ClashAlive  bool           `json:"clashAlive"`
-	Version     string         `json:"version,omitempty"`
-	LastHash    string         `json:"lastHash"`
-	LastSyncAt  int64          `json:"lastSyncAt"`
-	LastResult  string         `json:"lastResult"`
-	BlockedHash string         `json:"blockedHash,omitempty"`
-	Inbounds    []InboundState `json:"inbounds"`
+	UnitActive  string           `json:"unitActive"` // active|failed|inactive|activating|unknown|"" (no unit)
+	ClashAlive  bool             `json:"clashAlive"`
+	Version     string           `json:"version,omitempty"`
+	Hostname    string           `json:"hostname,omitempty"` // os.Hostname(); "" when unavailable
+	LastHash    string           `json:"lastHash"`
+	LastSyncAt  int64            `json:"lastSyncAt"`
+	LastResult  string           `json:"lastResult"`
+	BlockedHash string           `json:"blockedHash,omitempty"`
+	Inbounds    []InboundState   `json:"inbounds"`
+	System      SystemStats      `json:"system,omitempty"`
+	Traffic     *TrafficSnapshot `json:"traffic,omitempty"`
 }
 
 func (a *Agent) Status(ctx context.Context) Status {
+	hostname, _ := os.Hostname() // "" on error; the panel falls back to the address host
 	st := Status{
 		Version:     Version,
+		Hostname:    hostname,
 		LastHash:    a.state.LastHash,
 		LastSyncAt:  a.state.LastSyncAt,
 		LastResult:  a.state.LastResult,
@@ -358,6 +373,11 @@ func (a *Agent) Status(ctx context.Context) Status {
 	}
 	if a.engine.Clash != nil {
 		st.ClashAlive = a.engine.Clash.Alive(ctx)
+	}
+	st.System = readSystemStats()
+	if a.traffic != nil {
+		snap := a.traffic.Snapshot()
+		st.Traffic = &snap
 	}
 	return st
 }

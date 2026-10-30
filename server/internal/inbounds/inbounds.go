@@ -93,7 +93,7 @@ type View struct {
 	Params    json.RawMessage `json:"params"`
 	Enabled   bool            `json:"enabled"`
 	RunLocal  bool            `json:"runLocal"` // false = local machine skips this inbound
-	Status    string          `json:"status"` // synced | drifted | pending | unknown | disabled | remote (nodes-only)
+	Status    string          `json:"status"`   // synced | drifted | pending | unknown | disabled | not_listening | paused | offline (node inbounds only)
 	Diffs     []Diff          `json:"diffs,omitempty"`
 	CreatedAt int64           `json:"createdAt"`
 	UpdatedAt int64           `json:"updatedAt"`
@@ -261,6 +261,14 @@ func validateHy2Raw(raw json.RawMessage, creating bool) (string, error) {
 	}
 	b, _ := json.Marshal(p)
 	return string(b), nil
+}
+
+// ValidateParams validates stored-style params for a protocol WITHOUT
+// create-time auto-generation: a missing secret is an error, never
+// invented. Node import uses this so an unmappable core inbound is
+// reported disabled instead of silently completed.
+func ValidateParams(protocol string, raw json.RawMessage) (string, error) {
+	return normalizeParams(protocol, raw, false)
 }
 
 // normalizeParams validates the raw params for a protocol and returns the

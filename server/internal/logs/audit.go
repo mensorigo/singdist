@@ -44,6 +44,8 @@ var actionLabels = map[string]string{
 	"PATCH /api/certs/:id/note":               "修改证书备注",
 	"DELETE /api/certs/:id":                   "删除证书",
 	"PATCH /api/settings":                     "修改设置",
+	"PATCH /api/nodes/:id":                    "修改节点",
+	"DELETE /api/nodes/:id":                   "删除节点",
 	"POST /api/sync":                          "同步到核心",
 	"GET /api/subscriptions/:id/preview":      "预览订阅",
 }

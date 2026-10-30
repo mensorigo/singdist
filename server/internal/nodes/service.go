@@ -3,6 +3,7 @@ package nodes
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -42,22 +43,34 @@ func errUpstream(msg string) *Error {
 // NodeView is the API shape for a node. The token is never returned:
 // the edit form sends an empty token to mean "keep the existing one".
 type NodeView struct {
-	ID               int64   `json:"id"`
-	Name             string  `json:"name"`
-	Address          string  `json:"address"`
-	PublicHost       string  `json:"publicHost"`
-	TLSMode          string  `json:"tlsMode"`
-	UsageRatio       float64 `json:"usageRatio"`
-	Online           bool    `json:"online"`
-	LastPushAt       int64   `json:"lastPushAt"`
-	LastPushResult   string  `json:"lastPushResult"`
-	LastError        string  `json:"lastError"`
-	LastOnlineAt     int64   `json:"lastOnlineAt"`
-	LastInboundCount int     `json:"lastInboundCount"`
-	LastVersion      string  `json:"lastVersion"`
-	Warning          string  `json:"warning,omitempty"` // creation-time probe warning, if any
-	CreatedAt        int64   `json:"createdAt"`
-	UpdatedAt        int64   `json:"updatedAt"`
+	ID               int64           `json:"id"`
+	Name             string          `json:"name"`
+	Address          string          `json:"address"`
+	PublicHost       string          `json:"publicHost"`
+	TLSMode          string          `json:"tlsMode"`
+	UsageRatio       float64         `json:"usageRatio"`
+	Paused           bool            `json:"paused"`
+	PausePending     bool            `json:"pausePending"` // paused but the empty push has not landed on the node yet
+	SyncStatus       string          `json:"syncStatus"`   // synced | pending | mismatch | offline | paused | unknown
+	SyncDetail       string          `json:"syncDetail"`   // human-readable reason when not synced, "" when synced
+	AgentUnitActive  string          `json:"agentUnitActive"`
+	AgentClashAlive  bool            `json:"agentClashAlive"`
+	AgentStatusAt    int64           `json:"agentStatusAt"`
+	AgentInbounds    []StatusInbound `json:"agentInbounds"`
+	AgentSystem      AgentSystem     `json:"agentSystem,omitempty"`
+	AgentTraffic     *AgentTraffic   `json:"agentTraffic,omitempty"`
+	AgentLastResult  string          `json:"agentLastResult"`
+	AgentBlockedHash string          `json:"agentBlockedHash"`
+	Online           bool            `json:"online"`
+	LastPushAt       int64           `json:"lastPushAt"`
+	LastPushResult   string          `json:"lastPushResult"`
+	LastError        string          `json:"lastError"`
+	LastOnlineAt     int64           `json:"lastOnlineAt"`
+	LastInboundCount int             `json:"lastInboundCount"`
+	LastVersion      string          `json:"lastVersion"`
+	Warning          string          `json:"warning,omitempty"` // creation-time probe warning, if any
+	CreatedAt        int64           `json:"createdAt"`
+	UpdatedAt        int64           `json:"updatedAt"`
 }
 
 // protocolTransport mirrors the agent's coreTypeTransports and the
@@ -73,6 +86,12 @@ var protocolTransport = map[string]string{
 }
 
 func toView(r store.NodeRow, now int64) NodeView {
+	pausePending := false
+	if r.Paused {
+		if _, pausedHash, err := BuildPausedPush(r); err == nil {
+			pausePending = r.LastPushHash != pausedHash
+		}
+	}
 	return NodeView{
 		ID:               r.ID,
 		Name:             r.Name,
@@ -80,6 +99,10 @@ func toView(r store.NodeRow, now int64) NodeView {
 		PublicHost:       r.PublicHost,
 		TLSMode:          r.TLSMode,
 		UsageRatio:       r.UsageRatio,
+		Paused:           r.Paused,
+		PausePending:     pausePending,
+		SyncStatus:       "unknown",
+		AgentInbounds:    []StatusInbound{},
 		Online:           r.Online(now),
 		LastPushAt:       r.LastPushAt,
 		LastPushResult:   r.LastPushResult,
@@ -92,11 +115,137 @@ func toView(r store.NodeRow, now int64) NodeView {
 	}
 }
 
-// CreateRequest is the POST /nodes body.
+// enrichSync fills a NodeView's agent snapshot fields and its sync
+// status from the stored snapshot, the stored desired/pushed hashes,
+// and the node's panel assignments. "Synced" is strict on purpose:
+// online, no push error, desired hash == pushed hash, no agent block,
+// the agent's own last result applied/no_change, and every enabled
+// panel-assigned inbound present on the agent and listening. Anything
+// else is pending (a push is still due), mismatch (something
+// disagrees), offline, paused, or unknown (no snapshot yet). Extra
+// agent inbounds the panel never assigned are not a mismatch: they
+// are the node's own local inbounds, shown on the card as-is.
+// Clash and core-unit state are shown as info only: they do not
+// decide sync, because inbounds can serve while Clash is down.
+func enrichSyncView(v NodeView, r store.NodeRow, now int64, assigned []store.InboundNodeRow, inbounds []store.InboundRow) NodeView {
+	if r.AgentStatus != "" {
+		var snap AgentStatus
+		if err := json.Unmarshal([]byte(r.AgentStatus), &snap); err == nil {
+			v.AgentUnitActive = snap.UnitActive
+			v.AgentClashAlive = snap.ClashAlive
+			v.AgentStatusAt = r.AgentStatusAt
+			v.AgentLastResult = snap.LastResult
+			v.AgentBlockedHash = snap.BlockedHash
+			v.AgentSystem = snap.System
+			v.AgentTraffic = snap.Traffic
+			v.AgentInbounds = snap.Inbounds
+			if v.AgentInbounds == nil {
+				v.AgentInbounds = []StatusInbound{}
+			}
+		}
+	}
+	if r.Paused {
+		v.SyncStatus = "paused"
+		return v
+	}
+	if !r.Online(now) {
+		v.SyncStatus = "offline"
+		v.SyncDetail = "节点离线"
+		return v
+	}
+	if r.AgentStatus == "" || r.AgentStatusAt == 0 || now-r.AgentStatusAt > store.OnlineWithin {
+		v.SyncStatus = "unknown"
+		v.SyncDetail = "暂无节点状态快照"
+		return v
+	}
+	if r.LastError != "" {
+		v.SyncStatus = "mismatch"
+		v.SyncDetail = "推送失败：" + r.LastError
+		return v
+	}
+	switch r.LastPushResult {
+	case "applied", "no_change", "":
+	default:
+		v.SyncStatus = "mismatch"
+		v.SyncDetail = "上次推送结果：" + r.LastPushResult
+		return v
+	}
+	if r.DesiredPushHash == "" {
+		v.SyncStatus = "unknown"
+		v.SyncDetail = "推送状态还没算出来"
+		return v
+	}
+	if r.DesiredPushHash != r.LastPushHash {
+		v.SyncStatus = "pending"
+		v.SyncDetail = "推送还没落到节点"
+		return v
+	}
+	var snap AgentStatus
+	if err := json.Unmarshal([]byte(r.AgentStatus), &snap); err != nil {
+		v.SyncStatus = "unknown"
+		v.SyncDetail = "节点状态快照损坏"
+		return v
+	}
+	if snap.BlockedHash != "" {
+		v.SyncStatus = "mismatch"
+		v.SyncDetail = "节点被阻塞，需清除阻塞并重推"
+		return v
+	}
+	switch snap.LastResult {
+	case "applied", "no_change":
+	default:
+		v.SyncStatus = "mismatch"
+		v.SyncDetail = "节点上次同步结果：" + snap.LastResult
+		return v
+	}
+	byID := map[int64]store.InboundRow{}
+	for _, ib := range inbounds {
+		byID[ib.ID] = ib
+	}
+	byName := map[string]StatusInbound{}
+	for _, ai := range snap.Inbounds {
+		byName[ai.Name] = ai
+	}
+	for _, a := range assigned {
+		ib, ok := byID[a.InboundID]
+		if !ok || !ib.Enabled {
+			continue
+		}
+		port := ib.Port
+		if a.Port > 0 {
+			port = a.Port
+		}
+		ai, ok := byName[ib.Name]
+		if !ok {
+			v.SyncStatus = "mismatch"
+			v.SyncDetail = "节点上缺入站：" + ib.Name
+			return v
+		}
+		if ai.Port != port {
+			v.SyncStatus = "mismatch"
+			v.SyncDetail = "节点入站端口不对：" + ib.Name
+			return v
+		}
+		if ai.Listening == nil || !*ai.Listening {
+			v.SyncStatus = "mismatch"
+			v.SyncDetail = "节点入站未在监听：" + ib.Name
+			return v
+		}
+	}
+	v.SyncStatus = "synced"
+	v.SyncDetail = ""
+	return v
+}
+
+// CreateRequest is the POST /nodes body. PairingCode is a temporary
+// pairing field: it is never stored and never audited — when set,
+// it is exchanged for a long-term token via the agent first, and
+// that token becomes the node's token. Token is then not required.
 type CreateRequest struct {
 	Name             string   `json:"name"`
 	Address          string   `json:"address"`
 	Token            string   `json:"token"`
+	PairingCode      string   `json:"pairing_code"`
 	PublicHost       string   `json:"publicHost"`
 	TLSMode          string   `json:"tlsMode"`
 	UsageRatio       *float64 `json:"usageRatio"`
@@ -104,14 +253,18 @@ type CreateRequest struct {
 }
 
 // UpdateRequest is the PATCH /nodes/:id body. Only non-nil fields are
-// applied; an empty token means "keep the existing one".
+// applied; an empty token means "keep the existing one". A set
+// PairingCode re-pairs the node: it is exchanged for a fresh token
+// that replaces the stored one, and the Token field is ignored.
 type UpdateRequest struct {
-	Name       *string  `json:"name"`
-	Address    *string  `json:"address"`
-	Token      *string  `json:"token"`
-	PublicHost *string  `json:"publicHost"`
-	TLSMode    *string  `json:"tlsMode"`
-	UsageRatio *float64 `json:"usageRatio"`
+	Name        *string  `json:"name"`
+	Address     *string  `json:"address"`
+	Token       *string  `json:"token"`
+	PairingCode *string  `json:"pairing_code"`
+	PublicHost  *string  `json:"publicHost"`
+	TLSMode     *string  `json:"tlsMode"`
+	UsageRatio  *float64 `json:"usageRatio"`
+	Paused      *bool    `json:"paused"`
 }
 
 // Service owns node business logic.
@@ -131,6 +284,16 @@ func validateName(name string) (string, error) {
 		return "", errValidation("name must be 1-64 characters")
 	}
 	return name, nil
+}
+
+// truncateRunes caps a derived name at n runes without appending an
+// ellipsis (unlike truncate, which is for error snippets).
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return string(r[:n])
+	}
+	return s
 }
 
 func validateAddress(address string) (string, error) {
@@ -189,10 +352,18 @@ func (s *Service) List(ctx context.Context) ([]NodeView, error) {
 	if err != nil {
 		return nil, err
 	}
+	inbounds, err := s.st.ListInbounds(ctx)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
 	out := []NodeView{}
 	for _, r := range rows {
-		out = append(out, toView(r, now))
+		assigned, err := s.st.NodeInboundAssignments(ctx, r.ID)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, enrichSyncView(toView(r, now), r, now, assigned, inbounds))
 	}
 	return out, nil
 }
@@ -209,21 +380,90 @@ func (s *Service) Get(ctx context.Context, id int64) (NodeView, []int64, error) 
 	if err != nil {
 		return NodeView{}, nil, err
 	}
-	return toView(*r, time.Now().Unix()), ids, nil
+	assigned, err := s.st.NodeInboundAssignments(ctx, id)
+	if err != nil {
+		return NodeView{}, nil, err
+	}
+	inbounds, err := s.st.ListInbounds(ctx)
+	if err != nil {
+		return NodeView{}, nil, err
+	}
+	return enrichSyncView(toView(*r, time.Now().Unix()), *r, time.Now().Unix(), assigned, inbounds), ids, nil
+}
+
+// pairForAddress exchanges a pairing code for a long-term token at
+// the agent. An old-agent 404 becomes the upgrade message; a
+// generic pairing failure becomes a validation error carrying the
+// agent's message; anything else (unreachable, bad address) is an
+// upstream error.
+func (s *Service) pairForAddress(ctx context.Context, address, code string) (string, error) {
+	token, err := s.client.Pair(ctx, address, code)
+	if err != nil {
+		if errors.Is(err, ErrPairingUnsupported) {
+			return "", errValidation("节点 agent 版本过旧，不支持配对，请升级 agent 后再试")
+		}
+		if errors.Is(err, ErrPairingInvalid) {
+			return "", errValidation(err.Error())
+		}
+		return "", errUpstream(truncate(err.Error(), 200))
+	}
+	return token, nil
+}
+
+// RequestPairingCode validates an address and asks the agent to
+// generate a pairing code. It returns only ok/retry_after: the code
+// itself is never in this response (it goes to the agent log).
+func (s *Service) RequestPairingCode(ctx context.Context, address string) (bool, int, error) {
+	addr, err := validateAddress(address)
+	if err != nil {
+		return false, 0, err
+	}
+	ok, retry, err := s.client.RequestPairingCode(ctx, addr)
+	if err != nil {
+		if errors.Is(err, ErrPairingUnsupported) {
+			return false, 0, errValidation("节点 agent 版本过旧，不支持配对，请升级 agent 后再试")
+		}
+		return false, 0, errUpstream(truncate(err.Error(), 200))
+	}
+	return ok, retry, nil
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (NodeView, error) {
-	name, err := validateName(req.Name)
-	if err != nil {
-		return NodeView{}, err
+	// An empty 备注 is filled from the node's hostname (creation
+	// probe) and falls back to the address host part; it never fails
+	// creation on its own. A non-empty 备注 keeps the old 1-64
+	// validation.
+	name := strings.TrimSpace(req.Name)
+	nameWasEmpty := name == ""
+	if !nameWasEmpty {
+		var err error
+		name, err = validateName(name)
+		if err != nil {
+			return NodeView{}, err
+		}
 	}
 	address, err := validateAddress(req.Address)
 	if err != nil {
 		return NodeView{}, err
 	}
-	token, err := validateToken(req.Token)
-	if err != nil {
-		return NodeView{}, err
+	// Pairing wins over a manual token: the code is exchanged first
+	// (no old-token probe is involved — there is no old token on a
+	// create), and the returned token becomes the node's token.
+	// Without a code, the manual token rules are unchanged.
+	var token string
+	paired := false
+	if code := strings.TrimSpace(req.PairingCode); code != "" {
+		t, err := s.pairForAddress(ctx, address, code)
+		if err != nil {
+			return NodeView{}, err
+		}
+		token, paired = t, true
+	} else {
+		t, err := validateToken(req.Token)
+		if err != nil {
+			return NodeView{}, err
+		}
+		token = t
 	}
 	tlsMode, err := validateTLSMode(req.TLSMode)
 	if err != nil {
@@ -232,6 +472,34 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (NodeView, erro
 	ratio, err := validateRatio(req.UsageRatio)
 	if err != nil {
 		return NodeView{}, err
+	}
+	// Derive an empty 备注 before insert (the row needs a name for
+	// the UNIQUE check). The probe is capped at 3s like the
+	// post-insert probe below, and its result is reused for the view
+	// so an empty-name creation probes at most once. A failed probe,
+	// or an old agent without the hostname field, falls back to the
+	// address host part (address validation guarantees a non-empty
+	// host, so derivation always yields a name) and still creates
+	// the node — only the warning is set.
+	var probeStatus *AgentStatus
+	probeOK := false
+	if nameWasEmpty {
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		st, perr := s.client.Status(probeCtx, address, token)
+		cancel()
+		if perr == nil && st != nil {
+			probeStatus, probeOK = st, true
+			if h := truncateRunes(strings.TrimSpace(st.Hostname), 64); h != "" {
+				name = h
+			}
+		}
+		if name == "" {
+			if _, hostport, aerr := ParseAddress(address); aerr == nil {
+				if host, _, herr := net.SplitHostPort(hostport); herr == nil {
+					name = truncateRunes(host, 64)
+				}
+			}
+		}
 	}
 	existing, err := s.st.ListNodes(ctx)
 	if err != nil {
@@ -265,17 +533,40 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (NodeView, erro
 		return NodeView{}, err
 	}
 	v := toView(*r, now)
-	// Creation-time reachability probe (capped at 3s so a dead node
-	// does not stall creation): a failure only warns — the node is
-	// still registered and the background poller keeps probing it.
-	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
-	defer cancel()
-	if st, err := s.client.Status(probeCtx, r.Address, r.Token); err != nil {
-		v.Warning = "节点暂时无法联系，创建已保存，后台会继续探测"
-	} else {
+	// A pairing just proved the agent reachable with the fresh
+	// token, so a flaky follow-up probe must not warn (and must
+	// not suppress the frontend's post-create import scan): the
+	// node is online by construction of the pairing itself.
+	if paired {
 		v.Online = true
-		v.LastInboundCount = len(st.Inbounds)
-		v.LastVersion = st.Version
+		if probeOK {
+			v.LastInboundCount = len(probeStatus.Inbounds)
+			v.LastVersion = probeStatus.Version
+		}
+	} else if nameWasEmpty {
+		if probeOK {
+			v.Online = true
+			v.LastInboundCount = len(probeStatus.Inbounds)
+			v.LastVersion = probeStatus.Version
+		} else {
+			// Same warning as the post-insert probe below, without
+			// probing a second time.
+			v.Warning = "节点暂时无法联系，创建已保存，后台会继续探测"
+		}
+	} else {
+		// Creation-time reachability probe (capped at 3s so a dead
+		// node does not stall creation): a failure only warns — the
+		// node is still registered and the background poller keeps
+		// probing it.
+		probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		if st, err := s.client.Status(probeCtx, r.Address, r.Token); err != nil {
+			v.Warning = "节点暂时无法联系，创建已保存，后台会继续探测"
+		} else {
+			v.Online = true
+			v.LastInboundCount = len(st.Inbounds)
+			v.LastVersion = st.Version
+		}
 	}
 	return v, nil
 }
@@ -287,6 +578,26 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (Node
 			return NodeView{}, errNotFound("node")
 		}
 		return NodeView{}, err
+	}
+	// Re-pairing first: the code is exchanged against the effective
+	// address (the new address when one is given, else the stored
+	// one) before any old-token use. The returned token replaces
+	// the stored one below, and the manual Token field is ignored.
+	var pairedToken string
+	if req.PairingCode != nil && strings.TrimSpace(*req.PairingCode) != "" {
+		effAddr := r.Address
+		if req.Address != nil {
+			a, err := validateAddress(*req.Address)
+			if err != nil {
+				return NodeView{}, err
+			}
+			effAddr = a
+		}
+		t, err := s.pairForAddress(ctx, effAddr, strings.TrimSpace(*req.PairingCode))
+		if err != nil {
+			return NodeView{}, err
+		}
+		pairedToken = t
 	}
 	addrChanged, tokenChanged := false, false
 	if req.Name != nil {
@@ -317,7 +628,12 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (Node
 		}
 		r.Address = address
 	}
-	if req.Token != nil {
+	if pairedToken != "" {
+		if pairedToken != r.Token {
+			tokenChanged = true
+		}
+		r.Token = pairedToken
+	} else if req.Token != nil {
 		if token := strings.TrimSpace(*req.Token); token != "" {
 			token, err := validateToken(token)
 			if err != nil {
@@ -346,6 +662,15 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (Node
 		}
 		r.UsageRatio = ratio
 	}
+	// Pausing never resets push state: the hash is kept, so the
+	// poller pushes the empty payload on pause (its hash differs)
+	// and the normal payload again on enable (when it differs from
+	// the paused hash). Flipping the flag only clears a stale push
+	// backoff, so the stop/restore push is not delayed by it.
+	pauseChanged := req.Paused != nil && *req.Paused != r.Paused
+	if req.Paused != nil {
+		r.Paused = *req.Paused
+	}
 	now := time.Now().Unix()
 	r.UpdatedAt = now
 	if err := s.st.UpdateNode(ctx, *r); err != nil {
@@ -353,6 +678,11 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (Node
 			return NodeView{}, errConflict("node name already exists")
 		}
 		return NodeView{}, err
+	}
+	if pauseChanged {
+		if err := s.st.ClearNodeNextRetry(ctx, id); err != nil {
+			return NodeView{}, err
+		}
 	}
 	// A node that moved to a different agent (or got a new token) must
 	// be pushed fresh: the stored hash belongs to the old agent and
@@ -369,34 +699,40 @@ func (s *Service) Update(ctx context.Context, id int64, req UpdateRequest) (Node
 	return toView(*fresh, now), nil
 }
 
-// Delete pushes an empty managed set first (so the agent drops every
-// centrally managed inbound; operator passthrough on the node stays),
-// then deletes the record. When the node is unreachable the record is
-// still deleted, but the caller gets a warning: the node may keep
-// serving the old config until its agent is stopped by hand.
-func (s *Service) Delete(ctx context.Context, id int64) (string, error) {
-	r, err := s.st.GetNode(ctx, id)
-	if err != nil {
+// DeleteResult is the panel-side outcome of deleting a node.
+type DeleteResult struct {
+	Assignments     int
+	DeletedInbounds []string
+}
+
+// Delete removes a node and its panel-side related data only — it
+// never contacts the node's agent, never pushes an empty config, and
+// never stops anything on the node. The node's own inbounds keep
+// running there; they simply stop appearing in panel subscriptions
+// (and in subscriptions newly rendered from templates) because the
+// node record, its assignments, and any single-machine inbounds (plus
+// those inbounds' template references) are gone. Restoring a deleted
+// node means adding it again from scratch (re-pairing if needed).
+// An unreachable node deletes just the same: nothing here depends on
+// the agent at all.
+func (s *Service) Delete(ctx context.Context, id int64) (DeleteResult, error) {
+	if _, err := s.st.GetNode(ctx, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", errNotFound("node")
+			return DeleteResult{}, errNotFound("node")
 		}
-		return "", err
+		return DeleteResult{}, err
 	}
-	pushCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	payload := PushPayload{
-		Inbounds:   []PushInbound{},
-		PublicHost: PublicHostOf(r.PublicHost, r.Address),
+	res, err := s.st.DeleteNodePanelOnly(ctx, id, time.Now().Unix())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return DeleteResult{}, errNotFound("node")
+		}
+		return DeleteResult{}, err
 	}
-	res, err := s.client.Push(pushCtx, r.Address, r.Token, payload)
-	warning := ""
-	if err != nil || res == nil || (res.Result != "applied" && res.Result != "no_change") {
-		warning = "node did not confirm the empty push; it may still serve the old config until its agent is stopped by hand"
-	}
-	if err := s.st.DeleteNode(ctx, id); err != nil {
-		return "", err
-	}
-	return warning, nil
+	return DeleteResult{
+		Assignments:     res.Assignments,
+		DeletedInbounds: res.DeletedInbounds,
+	}, nil
 }
 
 // PushNow forces a background push (manual retry / recovery).
@@ -446,12 +782,21 @@ func (s *Service) ProbeStatus(ctx context.Context, id int64) (*AgentStatus, Node
 		return nil, NodeView{}, errUpstream(truncate(err.Error(), 200))
 	}
 	now := time.Now().Unix()
-	_ = s.st.RecordNodeOnline(ctx, id, len(st.Inbounds), st.Version, now)
+	raw, _ := json.Marshal(st)
+	_ = s.st.RecordNodeAgentStatus(ctx, id, string(raw), len(st.Inbounds), st.Version, now)
 	fresh, err := s.st.GetNode(ctx, id)
 	if err != nil {
 		return nil, NodeView{}, err
 	}
-	return st, toView(*fresh, now), nil
+	assigned, err := s.st.NodeInboundAssignments(ctx, id)
+	if err != nil {
+		return nil, NodeView{}, err
+	}
+	inbounds, err := s.st.ListInbounds(ctx)
+	if err != nil {
+		return nil, NodeView{}, err
+	}
+	return st, enrichSyncView(toView(*fresh, now), *fresh, now, assigned, inbounds), nil
 }
 
 // GetInboundNodes returns the remote node ids assigned to an inbound.

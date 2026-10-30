@@ -47,6 +47,7 @@ import {
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
+
 const ICON_BTN_CLS =
   "flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 
@@ -145,7 +146,7 @@ function RowActions({
             {v.enabled ? "停用" : "启用"}
           </DropdownMenuItem>
           <DropdownMenuItem
-            className="text-[13px] text-destructive focus:text-destructive"
+            className="text-[13px]"
             onClick={onDelete}
           >
             <Trash className="mr-1.5 h-4 w-4" />
@@ -407,13 +408,35 @@ export default function SubscriptionsPage({
 
   return (
     <div className="space-y-4">
-      {/* Positions unchanged: title on the left, view switch +
-          新建订阅 on the right. Only the title gets a small container,
-          and as a direct child of this space-y-4 root its left edge
-          lines up with the list cards below. */}
-      <div className="flex items-center justify-between">
-        <div className="rounded-xl border bg-card px-4 py-2 shadow-sm">
-          <p className="text-base font-semibold">订阅列表</p>
+      {/* Overview on the left, view switch + 新建订阅 on the
+          right, both inside one card so the row lines up with
+          the list cards below instead of floating bare. */}
+      <div className="flex flex-wrap items-center justify-between gap-4 rounded-[18px] border bg-card px-4 py-3 shadow-sm">
+        <div className="flex flex-wrap items-center gap-6">
+          <div>
+            <p className="text-xs text-muted-foreground">订阅总数</p>
+            <p className="text-base font-semibold">{subs?.length ?? "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">启用中</p>
+            <p className="text-base font-semibold">
+              {subs ? subs.filter((v) => v.enabled).length : "—"}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">已停用</p>
+            <p className="text-base font-semibold">
+              {subs ? subs.filter((v) => !v.enabled).length : "—"}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">在线 IP 总数</p>
+            <p className="text-base font-semibold">
+              {onlineCounts
+                ? Object.values(onlineCounts).reduce((s, c) => s + c, 0)
+                : "—"}
+            </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {/* Same segmented control as the Inbounds page's 入站/模板
@@ -453,7 +476,7 @@ export default function SubscriptionsPage({
         <p className="text-[13px] text-destructive">{actionError}</p>
       )}
       {view === "list" ? (
-        <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+        <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
           <div className="overflow-x-auto">
           <table className="w-full min-w-[980px] text-sm">
             <thead>
@@ -574,7 +597,7 @@ export default function SubscriptionsPage({
             <article
               key={v.id}
               className={cn(
-                "min-w-0 rounded-2xl border bg-card px-4 py-4 shadow-sm",
+                "min-w-0 rounded-[18px] border bg-card px-4 py-4 shadow-sm",
                 !v.enabled && "opacity-60",
               )}
             >

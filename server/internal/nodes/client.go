@@ -69,15 +69,49 @@ type StatusInbound struct {
 }
 
 // AgentStatus is the GET /api/agent/status response.
+type AgentSystem struct {
+	CpuPct    float64 `json:"cpuPct"`
+	Load1     float64 `json:"load1"`
+	Load5     float64 `json:"load5"`
+	Load15    float64 `json:"load15"`
+	MemTotal  int64   `json:"memTotal"`
+	MemUsed   int64   `json:"memUsed"`
+	MemPct    float64 `json:"memPct"`
+	DiskTotal int64   `json:"diskTotal"`
+	DiskUsed  int64   `json:"diskUsed"`
+	DiskPct   float64 `json:"diskPct"`
+	Available bool    `json:"available"`
+}
+
+type AgentTrafficEntry struct {
+	Inbound string `json:"inbound"`
+	User    string `json:"user,omitempty"`
+	Up      int64  `json:"up"`
+	Down    int64  `json:"down"`
+}
+
+type AgentTraffic struct {
+	Up             int64               `json:"up"`
+	Down           int64               `json:"down"`
+	UnassignedUp   int64               `json:"unassignedUp"`
+	UnassignedDown int64               `json:"unassignedDown"`
+	ByInbound      []AgentTrafficEntry `json:"byInbound"`
+	ByUser         []AgentTrafficEntry `json:"byUser"`
+	UpdatedAt      int64               `json:"updatedAt"`
+}
+
 type AgentStatus struct {
 	UnitActive  string          `json:"unitActive"`
 	ClashAlive  bool            `json:"clashAlive"`
 	Version     string          `json:"version,omitempty"`
+	Hostname    string          `json:"hostname,omitempty"` // absent on agents older than 0.1.4
 	LastHash    string          `json:"lastHash"`
 	LastSyncAt  int64           `json:"lastSyncAt"`
 	LastResult  string          `json:"lastResult"`
 	BlockedHash string          `json:"blockedHash,omitempty"`
 	Inbounds    []StatusInbound `json:"inbounds"`
+	System      AgentSystem     `json:"system,omitempty"`
+	Traffic     *AgentTraffic   `json:"traffic,omitempty"`
 }
 
 // --- address parsing --------------------------------------------------------
@@ -129,6 +163,8 @@ const (
 	statusTimeout    = 10 * time.Second
 	clearTimeout     = 10 * time.Second
 	checkPortTimeout = 10 * time.Second
+	inboundsTimeout  = 10 * time.Second
+	pairingTimeout   = 10 * time.Second
 	maxResponseBytes = 4 << 20
 )
 
@@ -136,6 +172,21 @@ const (
 // check-port endpoint: it predates that endpoint and must be
 // upgraded before per-machine port checks can run against it.
 var ErrCheckPortUnsupported = errors.New("agent does not support check-port (upgrade the agent)")
+
+// ErrInboundsUnsupported means the agent answered 404 for the
+// inbounds endpoint: it predates node import and must be upgraded
+// before its core inbounds can be scanned.
+var ErrInboundsUnsupported = errors.New("agent does not support inbounds import (upgrade the agent)")
+
+// ErrPairingUnsupported means the agent answered 404 for a pairing
+// endpoint: it predates pairing (0.2.0) and must be upgraded before
+// a pairing code can be requested or verified against it.
+var ErrPairingUnsupported = errors.New("agent does not support pairing (upgrade the agent)")
+
+// ErrPairingInvalid is the agent's generic pairing failure ("配对码
+// 无效或已过期"). It deliberately carries no reason: a wrong code,
+// an expired code and an exhausted code are indistinguishable.
+var ErrPairingInvalid = errors.New("配对码无效或已过期")
 
 // Client talks to one agent's management API. v1 always skips TLS
 // verification (the token is the auth; TLS only encrypts). The tlsMode
@@ -184,6 +235,45 @@ func (c *Client) do(ctx context.Context, method, url, token string, body []byte)
 		return 0, nil, err
 	}
 	return resp.StatusCode, data, nil
+}
+
+// doNoAuth is do() without the Authorization header, for the two
+// pairing endpoints: they must work precisely when the panel has
+// no usable token for the node.
+func (c *Client) doNoAuth(ctx context.Context, method, url string, body []byte) (int, []byte, error) {
+	var rdr io.Reader
+	if body != nil {
+		rdr = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, url, rdr)
+	if err != nil {
+		return 0, nil, err
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode, data, nil
+}
+
+// agentErrorMessage extracts the agent's {"error": "..."} message, if
+// the body carries one.
+func agentErrorMessage(data []byte) string {
+	var res struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &res); err != nil {
+		return ""
+	}
+	return res.Error
 }
 
 func errForStatus(status int, body []byte) error {
@@ -286,6 +376,112 @@ func (c *Client) CheckPort(ctx context.Context, address, token string, port int,
 		return nil, fmt.Errorf("bad agent check-port response: %w", err)
 	}
 	return &chk, nil
+}
+
+// Inbounds fetches the agent's current core inbounds in full detail
+// (raw sing-box objects, secrets included — the panel needs them to
+// map the inbound faithfully). A 404 maps to ErrInboundsUnsupported
+// (the agent predates import).
+func (c *Client) Inbounds(ctx context.Context, address, token string) ([]json.RawMessage, error) {
+	base, err := c.baseURL(address)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, inboundsTimeout)
+	defer cancel()
+	status, data, err := c.do(ctx, http.MethodGet, base+"/api/agent/inbounds", token, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, ErrInboundsUnsupported
+	}
+	if status != http.StatusOK {
+		return nil, errForStatus(status, data)
+	}
+	var res struct {
+		Inbounds []json.RawMessage `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &res); err != nil {
+		return nil, fmt.Errorf("bad agent inbounds response: %w", err)
+	}
+	if res.Inbounds == nil {
+		res.Inbounds = []json.RawMessage{}
+	}
+	return res.Inbounds, nil
+}
+
+// RequestPairingCode asks the agent to generate a fresh pairing
+// code. The code is never in the response (it goes to the agent
+// log for the operator to read on the node); the caller gets only
+// ok and, when the agent refused within its 60-second interval,
+// retry_after in seconds. A 404 maps to ErrPairingUnsupported.
+func (c *Client) RequestPairingCode(ctx context.Context, address string) (bool, int, error) {
+	base, err := c.baseURL(address)
+	if err != nil {
+		return false, 0, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, pairingTimeout)
+	defer cancel()
+	status, data, err := c.doNoAuth(ctx, http.MethodPost, base+"/api/agent/request-pairing-code", []byte("{}"))
+	if err != nil {
+		return false, 0, err
+	}
+	if status == http.StatusNotFound {
+		return false, 0, ErrPairingUnsupported
+	}
+	if status != http.StatusOK {
+		return false, 0, errForStatus(status, data)
+	}
+	var res struct {
+		OK         bool `json:"ok"`
+		RetryAfter int  `json:"retry_after"`
+	}
+	if err := json.Unmarshal(data, &res); err != nil {
+		return false, 0, fmt.Errorf("bad agent pairing response: %w", err)
+	}
+	return res.OK, res.RetryAfter, nil
+}
+
+// Pair verifies a pairing code against the agent. On success it
+// returns the agent's freshly generated long-term token (the panel
+// saves it as the node's token); the code itself is never stored
+// by the panel. On failure it returns ErrPairingInvalid, with no
+// reason attached. A 404 maps to ErrPairingUnsupported.
+func (c *Client) Pair(ctx context.Context, address, code string) (string, error) {
+	base, err := c.baseURL(address)
+	if err != nil {
+		return "", err
+	}
+	body, err := json.Marshal(map[string]string{"code": code})
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, pairingTimeout)
+	defer cancel()
+	status, data, err := c.doNoAuth(ctx, http.MethodPost, base+"/api/agent/pair", body)
+	if err != nil {
+		return "", err
+	}
+	if status == http.StatusNotFound {
+		return "", ErrPairingUnsupported
+	}
+	if status != http.StatusOK {
+		if msg := agentErrorMessage(data); msg != "" {
+			return "", ErrPairingInvalid
+		}
+		return "", errForStatus(status, data)
+	}
+	var res struct {
+		Token string `json:"token"`
+	}
+	if err := json.Unmarshal(data, &res); err != nil {
+		return "", fmt.Errorf("bad agent pair response: %w", err)
+	}
+	if res.Token == "" {
+		return "", fmt.Errorf("agent returned an empty token")
+	}
+	return res.Token, nil
 }
 
 // ClearBlock asks the agent to clear its blocked input hash.

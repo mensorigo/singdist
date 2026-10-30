@@ -159,3 +159,23 @@ func BuildPush(ctx context.Context, st *store.Store, certMgr *certs.Manager, nod
 	sum := sha256.Sum256(raw)
 	return payload, hex.EncodeToString(sum[:]), nil
 }
+
+// BuildPausedPush returns the payload a paused node gets: no panel
+// inbounds at all. The agent drops previously pushed panel inbounds
+// from its running config (its own local-file inbounds are preserved
+// by its merge), so old clients can no longer connect even before
+// they update their subscription. The hash is computed exactly like
+// BuildPush's, so the poller can tell "pause already applied" from
+// "pause still pending" by comparing it with LastPushHash.
+func BuildPausedPush(node store.NodeRow) (PushPayload, string, error) {
+	payload := PushPayload{
+		Inbounds:   []PushInbound{},
+		PublicHost: PublicHostOf(node.PublicHost, node.Address),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return PushPayload{}, "", err
+	}
+	sum := sha256.Sum256(raw)
+	return payload, hex.EncodeToString(sum[:]), nil
+}

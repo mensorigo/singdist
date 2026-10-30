@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Pencil, Trash } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
@@ -27,6 +28,12 @@ const PROTOCOL_LABEL: Record<string, string> = {
   anytls: "AnyTLS",
   trojan: "Trojan",
 };
+
+// Row action trigger style, verbatim mirror of the SubscriptionsPage
+// RowActions baseline (the screenshot style): borderless 32px icon
+// button, muted icon, muted hover background.
+const ICON_BTN_CLS =
+  "flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
 
 // TemplatesPanel is the templates view inside the Inbounds page: a
 // template is a named set of inbounds, so it is managed next to the
@@ -84,7 +91,7 @@ export default function TemplatesPanel({
   };
 
   return (
-    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+    <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <div className="flex items-center justify-between">
         <p className="text-base font-semibold">模板（入站集合）</p>
         <Button
@@ -130,20 +137,25 @@ export default function TemplatesPanel({
                   {t.subscriptionCount}
                 </td>
                 <td className="py-2.5">
-                  <div className="flex items-center gap-3">
-                    <Button
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      title="编辑"
+                      aria-label="编辑"
                       onClick={() => setTplDialog(t)}
-                      className="h-8 rounded-xl px-3"
+                      className={ICON_BTN_CLS}
                     >
-                      编辑
-                    </Button>
-                    <Button
-                      variant="destructive"
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title="删除"
+                      aria-label="删除"
                       onClick={() => setPendingDelete(t)}
-                      className="h-8 rounded-xl px-3"
+                      className={`${ICON_BTN_CLS}`}
                     >
-                      删除
-                    </Button>
+                      <Trash className="h-4 w-4" />
+                    </button>
                   </div>
                 </td>
               </tr>

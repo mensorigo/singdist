@@ -151,6 +151,59 @@ export interface CertList {
   versions: CertInfo[];
 }
 
+export interface AgentInbound {
+  name: string;
+  protocol: string;
+  port: number;
+  source: string;
+  listening?: boolean;
+}
+
+export interface AgentSystem {
+  cpuPct: number;
+  load1: number;
+  load5: number;
+  load15: number;
+  memTotal: number;
+  memUsed: number;
+  memPct: number;
+  diskTotal: number;
+  diskUsed: number;
+  diskPct: number;
+  available: boolean;
+}
+
+export interface AgentTrafficEntry {
+  inbound: string;
+  user?: string;
+  up: number;
+  down: number;
+}
+
+export interface AgentTraffic {
+  up: number;
+  down: number;
+  unassignedUp: number;
+  unassignedDown: number;
+  byInbound: AgentTrafficEntry[];
+  byUser: AgentTrafficEntry[];
+  updatedAt: number;
+}
+
+export interface TrafficSummary {
+  local: AgentTraffic;
+  nodes: { nodeId: number; nodeName: string; traffic: AgentTraffic }[];
+  bySubscription: {
+    name: string;
+    up: number;
+    down: number;
+    byInbound: { inbound: string; node: string; up: number; down: number }[];
+  }[];
+  byInbound: { inbound: string; node: string; up: number; down: number }[];
+  unassignedUp: number;
+  unassignedDown: number;
+}
+
 export interface NodeView {
   id: number;
   name: string;
@@ -158,6 +211,18 @@ export interface NodeView {
   publicHost: string;
   tlsMode: string;
   usageRatio: number;
+  paused: boolean;
+  pausePending: boolean;
+  syncStatus: string;
+  syncDetail: string;
+  agentUnitActive: string;
+  agentClashAlive: boolean;
+  agentStatusAt: number;
+  agentInbounds: AgentInbound[];
+  agentSystem?: AgentSystem;
+  agentTraffic?: AgentTraffic;
+  agentLastResult: string;
+  agentBlockedHash: string;
   online: boolean;
   lastPushAt: number;
   lastPushResult: string;
@@ -175,10 +240,18 @@ export interface NodeDetail {
   inboundIds: number[];
 }
 
+// Panel host identity for the inbound form's 本机 row (GET /api/local-machine).
+export interface LocalMachine {
+  hostname: string;
+  ip: string;
+  port: number;
+}
+
 export interface NodeCreate {
   name: string;
   address: string;
-  token: string;
+  token?: string;
+  pairing_code?: string;
   publicHost?: string;
   tlsMode?: string;
   usageRatio?: number;
@@ -189,9 +262,11 @@ export interface NodeUpdate {
   name?: string;
   address?: string;
   token?: string;
+  pairing_code?: string;
   publicHost?: string;
   tlsMode?: string;
   usageRatio?: number;
+  paused?: boolean;
 }
 
 export interface AgentStatusInbound {
@@ -211,6 +286,33 @@ export interface AgentStatus {
   lastResult: string;
   blockedHash?: string;
   inbounds: AgentStatusInbound[];
+}
+
+// One node core inbound offered for import. Params are never sent:
+// confirm re-fetches from the agent by name, so import secrets stay
+// off the browser for this flow.
+export interface ImportCandidate {
+  name: string;
+  protocol: string;
+  port: number;
+  disabledReason?: string;
+}
+
+export interface ImportCreated {
+  id: number;
+  name: string;
+  protocol: string;
+  port: number;
+}
+
+export interface ImportSkipped {
+  name: string;
+  reason: string;
+}
+
+export interface ImportResult {
+  created: ImportCreated[];
+  skipped: ImportSkipped[];
 }
 
 export const api = {
@@ -246,6 +348,7 @@ export const api = {
     }),
   dashboardSummary: () =>
     request<DashboardSummary>("/api/dashboard/summary"),
+  localMachine: () => request<LocalMachine>("/api/local-machine"),
   logs: (params: LogQuery) => {
     const qs = new URLSearchParams();
     qs.set("category", params.category);
@@ -313,6 +416,7 @@ export const api = {
         method: "POST",
       }),
   },
+  trafficSummary: () => request<TrafficSummary>("/api/traffic/summary"),
   nodes: {
     list: () => request<NodeView[]>("/api/nodes"),
     get: (id: number) => request<NodeDetail>(`/api/nodes/${id}`),
@@ -360,6 +464,23 @@ export const api = {
       request<AgentPortCheck>(
         `/api/nodes/${nodeId}/check-port?port=${port}&transport=${encodeURIComponent(transport)}`,
       ),
+    requestPairingCode: (address: string) =>
+      request<{ ok: boolean; retry_after: number }>(
+        `/api/nodes/request-pairing-code`,
+        {
+          method: "POST",
+          body: JSON.stringify({ address }),
+        },
+      ),
+    importScan: (nodeId: number) =>
+      request<{ candidates: ImportCandidate[] }>(
+        `/api/nodes/${nodeId}/import-scan`,
+      ),
+    importInbounds: (nodeId: number, names: string[]) =>
+      request<ImportResult>(`/api/nodes/${nodeId}/import`, {
+        method: "POST",
+        body: JSON.stringify({ names }),
+      }),
   },
   templates: {
     list: () => request<TemplateView[]>("/api/templates"),
@@ -628,7 +749,9 @@ export type InboundStatus =
   | "pending"
   | "unknown"
   | "disabled"
-  | "remote";
+  | "not_listening"
+  | "paused"
+  | "offline";
 
 export interface InboundDiff {
   field:

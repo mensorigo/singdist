@@ -47,7 +47,6 @@ const CATEGORIES: { value: LogCategory; label: string }[] = [
   { value: "core", label: "核心" },
   { value: "panel", label: "面板操作" },
   { value: "connection", label: "客户端连接" },
-  { value: "config", label: "配置更改" },
 ];
 
 const LEVELS = [
@@ -361,40 +360,6 @@ export default function LogsPage({
         </li>
       );
     }
-    if (e.category === "config") {
-      // One row is one field-level change a sync made from the file:
-      // action label + item + old→new + the reason, muted. Illegal
-      // drops get the same accent as a failed panel row.
-      const dropped = e.action === "非法丢弃";
-      return (
-        <li
-          key={key}
-          className={cn(
-            "flex gap-2 border-l-2 border-transparent px-4 py-px",
-            dropped && "border-foreground font-semibold",
-          )}
-        >
-          {time}
-          <span
-            className={cn(
-              "w-16 shrink-0 tabular-nums",
-              dropped ? "text-foreground" : "text-muted-foreground",
-            )}
-          >
-            {e.action}
-          </span>
-          <span className="min-w-0 flex-1 font-normal whitespace-pre-wrap break-all">
-            {e.target}
-            {e.summary && (
-              <span className="text-muted-foreground"> {e.summary}</span>
-            )}
-            {e.detail && (
-              <span className="text-muted-foreground">（{e.detail}）</span>
-            )}
-          </span>
-        </li>
-      );
-    }
     if (e.category === "connection") {
       // One row is one connection: origin IP -> destination, plus the
       // subscription and node it used. A part stays blank when that
@@ -523,14 +488,13 @@ export default function LogsPage({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        核心与客户端连接来自 sing-box 运行日志；面板操作记录所有面板变更与结果，保留
-        90 天；配置更改记录每次同步时文件对面板的改动、透传与丢弃。
+        核心与客户端连接来自 sing-box 运行日志；面板操作记录所有面板变更与结果，保留 90 天。
       </p>
       {/* One big container for the logs, old-panel style: monospace,
       dense lines, scrollable. Lines stay selectable: copying IPs and
       domains is the point. */}
       <div className="relative">
-        <div className="rounded-xl border bg-card text-card-foreground shadow-sm">
+        <div className="rounded-[18px] border bg-card text-card-foreground shadow-sm">
           <div
             ref={containerRef}
             tabIndex={0}

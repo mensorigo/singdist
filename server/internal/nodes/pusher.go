@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"sync"
@@ -114,6 +115,11 @@ func (p *Pusher) tickNode(ctx context.Context, n store.NodeRow) {
 			n = *fresh
 		}
 	}
+	// A paused node is still pushed, but only with the empty payload
+	// (see push): that is what actually stops its panel inbounds.
+	// Its panel record, assignments and inbound definitions stay
+	// untouched; only its running core config changes. The status
+	// probe above still ran, so online evidence stays fresh.
 	if now.Unix() < n.NextRetryAt {
 		return
 	}
@@ -122,6 +128,8 @@ func (p *Pusher) tickNode(ctx context.Context, n store.NodeRow) {
 
 // PushNow forces a push in the background (manual retry / recovery).
 // It returns false when a push for the node is already running.
+// On a paused node it forces the empty (stop) push, not the normal
+// payload, because push() builds the paused payload for paused nodes.
 func (p *Pusher) PushNow(ctx context.Context, nodeID int64) (bool, error) {
 	n, err := p.st.GetNode(ctx, nodeID)
 	if err != nil {
@@ -146,21 +154,40 @@ func (p *Pusher) probeStatus(ctx context.Context, n store.NodeRow) {
 	if err != nil {
 		return
 	}
-	_ = p.st.RecordNodeOnline(ctx, n.ID, len(st.Inbounds), st.Version, time.Now().Unix())
+	raw, _ := json.Marshal(st)
+	_ = p.st.RecordNodeAgentStatus(ctx, n.ID, string(raw), len(st.Inbounds), st.Version, time.Now().Unix())
 }
 
 // push builds the desired payload and pushes it unless it matches the
 // last successful push (force bypasses that check). It records the
-// outcome on the node row and in the audit log.
+// outcome on the node row and in the audit log. For a paused node the
+// desired payload is the empty one: once its hash is recorded, later
+// polls are no_change and the node is not pushed again until it is
+// enabled (when the normal payload hash differs again) or its
+// assignments change. A failed paused push records a 60s backoff
+// like any other failure, so the poller retries it instead of
+// silently leaving the node running.
 func (p *Pusher) push(ctx context.Context, n store.NodeRow, force bool) (string, error) {
 	now := time.Now().Unix()
-	payload, hash, err := BuildPush(ctx, p.st, p.certMgr, n)
+	var payload PushPayload
+	var hash string
+	var err error
+	if n.Paused {
+		payload, hash, err = BuildPausedPush(n)
+	} else {
+		payload, hash, err = BuildPush(ctx, p.st, p.certMgr, n)
+	}
 	if err != nil {
 		p.log.Warn("node push build failed", "node", n.Name, "error", err)
 		_ = p.st.RecordNodePushFailure(ctx, n.ID, "error", truncate(err.Error(), 200), now, now+int64(pushBackoff/time.Second))
 		p.audit(n, "failed", truncate(err.Error(), 200))
 		return "", err
 	}
+	// The desired hash is stored on every successful build, even
+	// when the push below is a no_change: that is what lets the
+	// card tell "up to date" from "a change is still pending"
+	// without rebuilding the payload.
+	_ = p.st.RecordDesiredPushHash(ctx, n.ID, hash, now)
 	if !force && hash == n.LastPushHash && n.LastPushHash != "" {
 		return "no_change", nil
 	}
@@ -174,7 +201,11 @@ func (p *Pusher) push(ctx context.Context, n store.NodeRow, force bool) (string,
 	switch res.Result {
 	case "applied", "no_change":
 		_ = p.st.RecordNodePushSuccess(ctx, n.ID, hash, res.Result, now)
-		p.audit(n, "success", res.Result)
+		detail := res.Result
+		if n.Paused {
+			detail = "paused: " + res.Result
+		}
+		p.audit(n, "success", detail)
 		return res.Result, nil
 	default:
 		detail := res.Detail

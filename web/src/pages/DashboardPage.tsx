@@ -234,7 +234,7 @@ function DashCard({
   dot?: "on" | "off";
 }) {
   return (
-    <div className="flex h-full flex-col gap-0 rounded-xl border bg-card py-6 text-card-foreground shadow-sm">
+    <div className="flex h-full flex-col gap-0 rounded-[18px] border bg-card py-6 text-card-foreground shadow-sm">
       <div className="flex flex-col space-y-3 px-6">
         <div className="flex items-center gap-2">
           <span className="shrink-0 text-foreground/70">{icon}</span>
@@ -321,7 +321,7 @@ function TrendCard({
   };
 
   return (
-    <div className="flex h-full flex-col rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+    <div className="flex h-full flex-col rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
           <p className="text-base font-semibold">流量趋势</p>
@@ -401,7 +401,7 @@ function TrendCard({
 
 function RealtimeCard({ data }: { data: DashboardSummary }) {
   return (
-    <div className="flex h-full flex-col rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+    <div className="flex h-full flex-col rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <p className="text-base font-semibold">实时网速</p>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">

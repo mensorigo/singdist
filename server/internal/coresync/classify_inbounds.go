@@ -534,6 +534,26 @@ func classifyMatchedInbound(tag string, oldIb, fileIb map[string]any, row *store
 // — a bare user entry lacks template, limit, expiry and token, so a
 // subscription cannot be built from it safely); absent users are
 // noted, never deleted (regen restores them).
+// panelSubByCoreName resolves a core username back to its panel
+// subscription for one inbound. Password protocols generate
+// coreUserName(sub, tag); vless keeps the plain subscription name,
+// which panel.byName already covers, so this is only the renamed
+// case. It is an exact map over panel subs, never a parse of the
+// name, so hyphenated subscription/inbound names cannot mislead it.
+func panelSubByCoreName(tag string, row *store.InboundRow, panel panelState, name string) (*store.SubscriptionRow, bool) {
+	switch row.Protocol {
+	case "hysteria2", "tuic", "anytls", "trojan":
+	default:
+		return nil, false
+	}
+	for i := range panel.subs {
+		if coreUserName(panel.subs[i].Name, tag) == name {
+			return &panel.subs[i], true
+		}
+	}
+	return nil, false
+}
+
 func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundRow, panel panelState, res *classifyResult) {
 	fileUsers := userList(fileIb)
 	oldUsers := userList(oldIb)
@@ -577,6 +597,17 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 				bu = oldByUUID[fuuid]
 			}
 		}
+		if row.Protocol == "trojan" && name == tag {
+			// Trojan's single core user (named after the
+			// inbound, see generate.go) is panel-owned, not
+			// a stranger: regen writes it, so it is never
+			// passthrough-appended. Password changes are
+			// already covered by passwordUniformity above.
+			if bu == nil {
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "]", detail: "与面板订阅同名，恢复面板值（文件用户不保留）"})
+			}
+			continue
+		}
 		if bu == nil {
 			// Name collision with a panel sub: panel names are
 			// panel-owned identities, so a file user carrying one
@@ -587,6 +618,13 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 			// dedupe would drop it silently while the log claims
 			// it was preserved.
 			if _, ok := panel.byName[name]; ok {
+				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "]", detail: "与面板订阅同名，恢复面板值（文件用户不保留）"})
+				continue
+			}
+			if _, ok := panelSubByCoreName(tag, row, panel, name); ok {
+				// Same, for a renamed core username: regen
+				// writes it, so it is never a stranger to
+				// preserve.
 				res.changes = append(res.changes, change{action: changeReverted, item: "inbounds[" + tag + "].users[" + name + "]", detail: "与面板订阅同名，恢复面板值（文件用户不保留）"})
 				continue
 			}
@@ -602,6 +640,8 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 		// baseline name, else same baseline uuid.
 		var sub *store.SubscriptionRow
 		if s, ok := panel.byName[asString(bu["name"])]; ok {
+			sub = s
+		} else if s, ok := panelSubByCoreName(tag, row, panel, asString(bu["name"])); ok {
 			sub = s
 		} else if hasUUID {
 			if buuid := asString(bu["uuid"]); buuid != "" {
@@ -643,6 +683,8 @@ func classifyUsers(tag string, oldIb, fileIb map[string]any, row *store.InboundR
 		// Absent user: note only. The panel restores it on regen;
 		// disabling the subscription in the panel is the revoke path.
 		if _, ok := panel.byName[name]; ok {
+			res.changes = append(res.changes, change{action: changeRestoreNote, item: "inbounds[" + tag + "].users[" + name + "]", detail: "文件缺失该用户，同步后面板会恢复；如需撤销请在面板停用该订阅"})
+		} else if _, ok := panelSubByCoreName(tag, row, panel, name); ok {
 			res.changes = append(res.changes, change{action: changeRestoreNote, item: "inbounds[" + tag + "].users[" + name + "]", detail: "文件缺失该用户，同步后面板会恢复；如需撤销请在面板停用该订阅"})
 		}
 	}
