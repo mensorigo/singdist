@@ -2,6 +2,7 @@ package traffic
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 
 	"singbox-ui/server/internal/nodes"
@@ -19,6 +20,9 @@ type Summary struct {
 	ByInbound      []InboundTraffic      `json:"byInbound"`
 	UnassignedUp   int64                 `json:"unassignedUp"`
 	UnassignedDown int64                 `json:"unassignedDown"`
+	// UnassignedByInbound splits the unassigned totals per
+	// inbound (and node), so a caller can see where the gap is.
+	UnassignedByInbound []InboundTraffic `json:"unassignedByInbound,omitempty"`
 }
 
 type NodeTraffic struct {
@@ -28,10 +32,22 @@ type NodeTraffic struct {
 }
 
 type SubscriptionTraffic struct {
-	Name      string           `json:"name"`
-	Up        int64            `json:"up"`
-	Down      int64            `json:"down"`
-	ByInbound []InboundTraffic `json:"byInbound"`
+	Name string `json:"name"`
+	// Up/Down are the bytes actually attributed to this
+	// subscription's core users.
+	Up   int64 `json:"up"`
+	Down int64 `json:"down"`
+	// UnassignedUp/Down are unassigned bytes from inbounds that
+	// exactly one enabled subscription uses: no other
+	// subscription could have produced them, so they are the
+	// only unassigned bytes ever allocated to a subscription.
+	// EstimatedUp/Down = Up/Down + UnassignedUp/Down. Shared-
+	// inbound unassigned bytes are never allocated.
+	UnassignedUp   int64            `json:"unassignedUp"`
+	UnassignedDown int64            `json:"unassignedDown"`
+	EstimatedUp    int64            `json:"estimatedUp"`
+	EstimatedDown  int64            `json:"estimatedDown"`
+	ByInbound      []InboundTraffic `json:"byInbound"`
 }
 
 type InboundTraffic struct {
@@ -143,6 +159,9 @@ func (s *SummaryService) Summary(ctx context.Context) (Summary, error) {
 		nt.Traffic.Down = nv.AgentTraffic.Down
 		nt.Traffic.UnassignedUp = nv.AgentTraffic.UnassignedUp
 		nt.Traffic.UnassignedDown = nv.AgentTraffic.UnassignedDown
+		for _, e := range nv.AgentTraffic.UnassignedByInbound {
+			nt.Traffic.UnassignedByInbound = append(nt.Traffic.UnassignedByInbound, Entry(e))
+		}
 		for _, e := range nv.AgentTraffic.ByInbound {
 			nt.Traffic.ByInbound = append(nt.Traffic.ByInbound, Entry(e))
 		}
@@ -159,7 +178,80 @@ func (s *SummaryService) Summary(ctx context.Context) (Summary, error) {
 		out.UnassignedUp += nv.AgentTraffic.UnassignedUp
 		out.UnassignedDown += nv.AgentTraffic.UnassignedDown
 	}
+	// Sole-subscriber allocation: an inbound used by exactly one
+	// enabled subscription can only have produced that
+	// subscription's unassigned bytes (plus legacy passthrough
+	// users, which are KB-scale and were deleted as subscriptions).
+	// Shared-inbound unassigned bytes stay unallocated.
+	{
+		idToName := map[int64]string{}
+		for _, ib := range inbounds {
+			idToName[ib.ID] = ib.Name
+		}
+		usersOf := map[string]map[string]bool{}
+		if templates, err := s.st.ListTemplates(ctx); err == nil {
+			tplByID := map[int64]store.TemplateRow{}
+			for _, tpl := range templates {
+				tplByID[tpl.ID] = tpl
+			}
+			for _, sub := range subs {
+				if !sub.Enabled {
+					continue
+				}
+				tpl, ok := tplByID[sub.TemplateID]
+				if !ok {
+					continue
+				}
+				var ids []int64
+				if json.Unmarshal([]byte(tpl.InboundIDs), &ids) != nil {
+					continue
+				}
+				for _, id := range ids {
+					name, ok := idToName[id]
+					if !ok {
+						continue
+					}
+					if usersOf[name] == nil {
+						usersOf[name] = map[string]bool{}
+					}
+					usersOf[name][sub.Name] = true
+				}
+			}
+		}
+		sole := map[string]string{}
+		for name, set := range usersOf {
+			if len(set) == 1 {
+				for subName := range set {
+					sole[name] = subName
+				}
+			}
+		}
+		addUnassigned := func(nodeName, inbound string, up, down int64) {
+			out.UnassignedByInbound = append(out.UnassignedByInbound, InboundTraffic{Inbound: inbound, Node: nodeName, Up: up, Down: down})
+			subName, ok := sole[inbound]
+			if !ok {
+				return
+			}
+			st, ok := subTotals[subName]
+			if !ok {
+				st = &SubscriptionTraffic{Name: subName}
+				subTotals[subName] = st
+			}
+			st.UnassignedUp += up
+			st.UnassignedDown += down
+		}
+		for _, e := range out.Local.UnassignedByInbound {
+			addUnassigned("", e.Inbound, e.Up, e.Down)
+		}
+		for _, nt := range out.Nodes {
+			for _, e := range nt.Traffic.UnassignedByInbound {
+				addUnassigned(nt.NodeName, e.Inbound, e.Up, e.Down)
+			}
+		}
+	}
 	for _, st := range subTotals {
+		st.EstimatedUp = st.Up + st.UnassignedUp
+		st.EstimatedDown = st.Down + st.UnassignedDown
 		for k, it := range subByInbound {
 			if k.name == st.Name {
 				st.ByInbound = append(st.ByInbound, *it)
@@ -176,12 +268,13 @@ func (s *SummaryService) Summary(ctx context.Context) (Summary, error) {
 // SyncUsage writes the collector's per-subscription totals back to
 // the subscriptions table, so the subscription page's quota meter
 // and the client's Subscription-Userinfo header show the same
-// actual client traffic the collector already attributes (local +
-// node, per core user). Subscriptions with no attributed traffic
-// are left untouched, and only changed totals are written, so an
-// idle ticker does not churn the table. Unassigned bytes and
-// inbound-only traffic (trojan before the per-subscription fix,
-// shadowsocks) are never forced onto a subscription.
+// traffic the collector attributes (local + node, per core user).
+// It writes the estimated total: attributed bytes plus
+// sole-subscriber unassigned bytes (see Summary). Shared-inbound
+// unassigned bytes are never forced onto a subscription.
+// Subscriptions with no attributed or sole-subscriber traffic are
+// left untouched, and only changed totals are written, so an idle
+// ticker does not churn the table.
 func (s *SummaryService) SyncUsage(ctx context.Context) (int, error) {
 	sum, err := s.Summary(ctx)
 	if err != nil {
@@ -201,10 +294,10 @@ func (s *SummaryService) SyncUsage(ctx context.Context) (int, error) {
 		if !ok {
 			continue
 		}
-		if tot.Up == sub.UsedUp && tot.Down == sub.UsedDown {
+		if tot.EstimatedUp == sub.UsedUp && tot.EstimatedDown == sub.UsedDown {
 			continue
 		}
-		if err := s.st.UpdateSubscriptionUsage(ctx, sub.ID, tot.Up, tot.Down); err != nil {
+		if err := s.st.UpdateSubscriptionUsage(ctx, sub.ID, tot.EstimatedUp, tot.EstimatedDown); err != nil {
 			return updated, err
 		}
 		updated++

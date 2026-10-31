@@ -90,3 +90,44 @@ func TestSyncUsageWritesCollectorTotals(t *testing.T) {
 		t.Fatalf("SyncUsage second run updated %d, want 0", n)
 	}
 }
+
+func TestSoleSubscriberUnassignedAllocated(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	st, err := store.Open(ctx, filepath.Join(dir, "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	now := int64(1700000000)
+	if _, err := st.CreateInbound(ctx, "vless-reality", "vless-reality", 443,
+		`{"sni":"example.com","publicKey":"k","privateKey":"p","shortId":"","flow":""}`, true, now); err != nil {
+		t.Fatal(err)
+	}
+	tplID, err := st.CreateTemplate(ctx, "tpl", "[1]", "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.CreateSubscription(ctx, store.SubscriptionRow{
+		Name: "test", UUID: "11111111-2222-3333-4444-555555555555", Token: "tok", TemplateID: tplID,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := New("http://127.0.0.1:9", st, "")
+	c.byKey["vless-reality\x00test"] = &Entry{Inbound: "vless-reality", User: "test", Up: 100, Down: 200}
+	c.byInb["vless-reality"] = &Entry{Inbound: "vless-reality", Up: 100, Down: 200}
+	c.unByInb["vless-reality"] = &Entry{Inbound: "vless-reality", Up: 10, Down: 20}
+	c.unUp, c.unDown = 10, 20
+	svc := NewSummaryService(st, nodes.NewService(st, nil), c)
+	sum, err := svc.Summary(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.BySubscription) != 1 {
+		t.Fatalf("subscriptions = %d, want 1", len(sum.BySubscription))
+	}
+	got := sum.BySubscription[0]
+	if got.Up != 100 || got.UnassignedUp != 10 || got.EstimatedUp != 110 || got.EstimatedDown != 220 {
+		t.Fatalf("test = %+v, want Up 100 UnassignedUp 10 Estimated 110/220", got)
+	}
+}

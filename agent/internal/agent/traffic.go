@@ -31,13 +31,14 @@ type TrafficEntry struct {
 // (short connections that started and ended between Clash polls,
 // or log lines the tail had not seen yet).
 type TrafficSnapshot struct {
-	Up             int64          `json:"up"`
-	Down           int64          `json:"down"`
-	UnassignedUp   int64          `json:"unassignedUp"`
-	UnassignedDown int64          `json:"unassignedDown"`
-	ByInbound      []TrafficEntry `json:"byInbound"`
-	ByUser         []TrafficEntry `json:"byUser"`
-	UpdatedAt      int64          `json:"updatedAt"`
+	Up                  int64          `json:"up"`
+	Down                int64          `json:"down"`
+	UnassignedUp        int64          `json:"unassignedUp"`
+	UnassignedDown      int64          `json:"unassignedDown"`
+	ByInbound           []TrafficEntry `json:"byInbound"`
+	ByUser              []TrafficEntry `json:"byUser"`
+	UnassignedByInbound []TrafficEntry `json:"unassignedByInbound,omitempty"`
+	UpdatedAt           int64          `json:"updatedAt"`
 }
 
 // trafficCollector polls the core's Clash /connections endpoint
@@ -46,7 +47,7 @@ type TrafficSnapshot struct {
 // alive. Log lines give (inbound, user); Clash gives bytes.
 // A connection that appears in Clash but has no log mapping yet
 // is retried on later polls; bytes for a connection that starts
-// and ends between two polls are lost to the breakdown (they
+// and ends between two 1s polls are lost to the breakdown (they
 // still count in the Clash totals, not here), so ByInbound/ByUser
 // sums are a lower bound and Unassigned covers the gap honestly.
 type trafficCollector struct {
@@ -59,6 +60,7 @@ type trafficCollector struct {
 	byInb    map[string]*TrafficEntry // inbound
 	unUp     int64
 	unDown   int64
+	unByInb  map[string]*TrafficEntry
 	active   map[string]*activeConn
 	logOff   int64
 	pending  map[string]*logConn // sing-box connection id
@@ -78,18 +80,25 @@ type logConn struct {
 	inbound string
 	user    string
 	seen    time.Time
+	// tsMs is the log line's own timestamp (unix ms, UTC), parsed
+	// from the "+0000 YYYY-MM-DD HH:MM:SS" prefix; 0 when the
+	// line's timestamp could not be parsed. It is the key for
+	// time-based matching against the Clash connection start.
+	tsMs int64
 }
 
 type clashConn struct {
 	ID       string `json:"id"`
 	Upload   int64  `json:"upload"`
 	Download int64  `json:"download"`
+	Start    string `json:"start"`
 	Metadata struct {
 		SourceIP string `json:"sourceIP"`
 		// Real sing-box Clash API returns sourcePort as a STRING,
 		// not a number; typing it as int makes the whole decode
 		// fail and drops every connection's bytes.
 		SourcePort string `json:"sourcePort"`
+		Type       string `json:"type"`
 	} `json:"metadata"`
 }
 
@@ -115,6 +124,7 @@ func newTrafficCollector(clashAddr, logPath, dataPath string) *trafficCollector 
 		dataPath:  dataPath,
 		byKey:     map[string]*TrafficEntry{},
 		byInb:     map[string]*TrafficEntry{},
+		unByInb:   map[string]*TrafficEntry{},
 		active:    map[string]*activeConn{},
 		pending:   map[string]*logConn{},
 		bySource:  map[string]*logConn{},
@@ -123,11 +133,25 @@ func newTrafficCollector(clashAddr, logPath, dataPath string) *trafficCollector 
 	return t
 }
 
+// AgentActiveEntry is the persisted form of one live Clash
+// connection, mirroring the panel collector: without it an agent
+// restart recounts in-flight connections from zero and can lose
+// their attribution.
+type AgentActiveEntry struct {
+	Inbound  string `json:"inbound"`
+	User     string `json:"user"`
+	Assigned bool   `json:"assigned"`
+	LastUp   int64  `json:"lastUp"`
+	LastDown int64  `json:"lastDown"`
+}
+
 type trafficFile struct {
-	ByKey  map[string]*TrafficEntry `json:"byKey"`
-	ByInb  map[string]*TrafficEntry `json:"byInb"`
-	UnUp   int64                    `json:"unUp"`
-	UnDown int64                    `json:"unDown"`
+	ByKey   map[string]*TrafficEntry     `json:"byKey"`
+	ByInb   map[string]*TrafficEntry     `json:"byInb"`
+	UnUp    int64                        `json:"unUp"`
+	UnDown  int64                        `json:"unDown"`
+	Active  map[string]*AgentActiveEntry `json:"active,omitempty"`
+	UnByInb map[string]*TrafficEntry     `json:"unByInb,omitempty"`
 }
 
 func (t *trafficCollector) load() {
@@ -151,13 +175,32 @@ func (t *trafficCollector) load() {
 		t.byInb = map[string]*TrafficEntry{}
 	}
 	t.unUp, t.unDown = f.UnUp, f.UnDown
+	if f.UnByInb != nil {
+		t.unByInb = f.UnByInb
+	}
+	for id, ae := range f.Active {
+		if ae == nil {
+			continue
+		}
+		t.active[id] = &activeConn{
+			inbound: ae.Inbound, user: ae.User, assigned: ae.Assigned,
+			lastUp: ae.LastUp, lastDown: ae.LastDown,
+		}
+	}
 }
 
 func (t *trafficCollector) saveLocked() {
 	if t.dataPath == "" {
 		return
 	}
-	f := trafficFile{ByKey: t.byKey, ByInb: t.byInb, UnUp: t.unUp, UnDown: t.unDown}
+	active := make(map[string]*AgentActiveEntry, len(t.active))
+	for id, ac := range t.active {
+		active[id] = &AgentActiveEntry{
+			Inbound: ac.inbound, User: ac.user, Assigned: ac.assigned,
+			LastUp: ac.lastUp, LastDown: ac.lastDown,
+		}
+	}
+	f := trafficFile{ByKey: t.byKey, ByInb: t.byInb, UnUp: t.unUp, UnDown: t.unDown, Active: active, UnByInb: t.unByInb}
 	b, err := json.Marshal(f)
 	if err != nil {
 		return
@@ -225,6 +268,14 @@ func (t *trafficCollector) tailLog() {
 		if line == "" {
 			continue
 		}
+		// Core log lines start "+0000 YYYY-MM-DD HH:MM:SS".
+		// Parse it (UTC) for time-based matching below.
+		var lineTsMs int64
+		if fields := strings.Fields(line); len(fields) >= 3 {
+			if ts, err := time.Parse("2006-01-02 15:04:05", fields[1]+" "+fields[2]); err == nil {
+				lineTsMs = ts.UnixMilli()
+			}
+		}
 		if m := logFromRe.FindStringSubmatch(line); m != nil {
 			lc, ok := t.pending[m[1]]
 			if !ok {
@@ -233,6 +284,9 @@ func (t *trafficCollector) tailLog() {
 			}
 			lc.source = m[3]
 			lc.inbound = m[2]
+			if lineTsMs != 0 {
+				lc.tsMs = lineTsMs
+			}
 			lc.seen = time.Now()
 			if lc.user != "" {
 				t.bySource[lc.source] = lc
@@ -247,6 +301,9 @@ func (t *trafficCollector) tailLog() {
 			}
 			lc.inbound = m[2]
 			lc.user = m[3]
+			if lc.tsMs == 0 && lineTsMs != 0 {
+				lc.tsMs = lineTsMs
+			}
 			lc.seen = time.Now()
 			if lc.source != "" {
 				t.bySource[lc.source] = lc
@@ -296,7 +353,27 @@ func (t *trafficCollector) pollClash() {
 		}
 		if !ac.assigned {
 			if lc, ok := t.bySource[src]; ok {
-				ac.inbound, ac.user, ac.assigned = lc.inbound, lc.user, true
+				// Reject a log entry whose timestamp is far from
+				// this connection's start: it is a different
+				// generation of a reused source port, and the
+				// real log line has not been tailed yet. The
+				// connection stays unassigned for this poll and
+				// is retried once the tail catches up.
+				assign := true
+				if lc.tsMs != 0 {
+					if start, err := time.Parse(time.RFC3339Nano, c.Start); err == nil {
+						diff := lc.tsMs - start.UnixMilli()
+						if diff < 0 {
+							diff = -diff
+						}
+						if diff > 30_000 {
+							assign = false
+						}
+					}
+				}
+				if assign {
+					ac.inbound, ac.user, ac.assigned = lc.inbound, lc.user, true
+				}
 			}
 		}
 		dUp := c.Upload - ac.lastUp
@@ -330,6 +407,15 @@ func (t *trafficCollector) pollClash() {
 		} else {
 			t.unUp += dUp
 			t.unDown += dDown
+			if tag := clashTag(c.Metadata.Type); tag != "" {
+				ue, ok := t.unByInb[tag]
+				if !ok {
+					ue = &TrafficEntry{Inbound: tag}
+					t.unByInb[tag] = ue
+				}
+				ue.Up += dUp
+				ue.Down += dDown
+			}
 		}
 	}
 	for id := range t.active {
@@ -339,12 +425,11 @@ func (t *trafficCollector) pollClash() {
 	}
 }
 
-
-// Run ticks until ctx is done; 5s matches the panel's push poll
-// cadence closely enough that short connections are the only
-// systematic loss (see the collector comment).
+// Run ticks until ctx is done; 1s (was 5s) so connections in
+// the 1-5s band are caught instead of falling to unassigned.
+// Sub-second connections are still the systematic loss.
 func (t *trafficCollector) Run(ctx context.Context) {
-	tick := time.NewTicker(5 * time.Second)
+	tick := time.NewTicker(1 * time.Second)
 	defer tick.Stop()
 	for {
 		select {
@@ -360,6 +445,13 @@ func (t *trafficCollector) Run(ctx context.Context) {
 	}
 }
 
+func clashTag(typeStr string) string {
+	if i := strings.Index(typeStr, "/"); i >= 0 && i+1 < len(typeStr) {
+		return typeStr[i+1:]
+	}
+	return ""
+}
+
 func (t *trafficCollector) Snapshot() TrafficSnapshot {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -372,6 +464,10 @@ func (t *trafficCollector) Snapshot() TrafficSnapshot {
 	for _, e := range t.byKey {
 		s.ByUser = append(s.ByUser, *e)
 	}
+	for _, e := range t.unByInb {
+		s.UnassignedByInbound = append(s.UnassignedByInbound, *e)
+	}
+	sort.Slice(s.UnassignedByInbound, func(i, j int) bool { return s.UnassignedByInbound[i].Inbound < s.UnassignedByInbound[j].Inbound })
 	sort.Slice(s.ByInbound, func(i, j int) bool { return s.ByInbound[i].Inbound < s.ByInbound[j].Inbound })
 	sort.Slice(s.ByUser, func(i, j int) bool {
 		if s.ByUser[i].Inbound != s.ByUser[j].Inbound {

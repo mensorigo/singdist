@@ -67,3 +67,36 @@ func TestTrafficCollectorMatchesLogToClash(t *testing.T) {
 		t.Logf("system stats unavailable in this environment (ok in tests): %+v", got)
 	}
 }
+
+func TestAgentActivePersistsAcrossRestart(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "traffic.json")
+	c := newTrafficCollector("", "", path)
+	c.active["conn-1"] = &activeConn{inbound: "vless-reality", user: "test", assigned: true, lastUp: 100, lastDown: 200}
+	c.mu.Lock()
+	c.saveLocked()
+	c.mu.Unlock()
+	c2 := newTrafficCollector("", "", path)
+	ac, ok := c2.active["conn-1"]
+	if !ok || ac.inbound != "vless-reality" || ac.user != "test" || !ac.assigned || ac.lastUp != 100 || ac.lastDown != 200 {
+		t.Fatalf("conn-1 restored = %+v, ok=%v, want assigned test/100/200", ac, ok)
+	}
+}
+
+func TestClashTagAndUnassignedBreakdown(t *testing.T) {
+	if got := clashTag("vless/vless-reality"); got != "vless-reality" {
+		t.Fatalf("clashTag vless = %q, want vless-reality", got)
+	}
+	if got := clashTag("hysteria2"); got != "" {
+		t.Fatalf("clashTag no slash = %q, want empty", got)
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "traffic.json")
+	c := newTrafficCollector("", "", path)
+	c.unByInb["vless-reality"] = &TrafficEntry{Inbound: "vless-reality", Up: 7, Down: 8}
+	c.unUp, c.unDown = 7, 8
+	snap := c.Snapshot()
+	if len(snap.UnassignedByInbound) != 1 || snap.UnassignedByInbound[0].Up != 7 {
+		t.Fatalf("unassigned breakdown = %+v, want 1 entry 7 up", snap.UnassignedByInbound)
+	}
+}

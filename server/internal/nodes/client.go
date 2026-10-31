@@ -93,13 +93,14 @@ type AgentTrafficEntry struct {
 }
 
 type AgentTraffic struct {
-	Up             int64               `json:"up"`
-	Down           int64               `json:"down"`
-	UnassignedUp   int64               `json:"unassignedUp"`
-	UnassignedDown int64               `json:"unassignedDown"`
-	ByInbound      []AgentTrafficEntry `json:"byInbound"`
-	ByUser         []AgentTrafficEntry `json:"byUser"`
-	UpdatedAt      int64               `json:"updatedAt"`
+	Up                  int64               `json:"up"`
+	Down                int64               `json:"down"`
+	UnassignedUp        int64               `json:"unassignedUp"`
+	UnassignedDown      int64               `json:"unassignedDown"`
+	ByInbound           []AgentTrafficEntry `json:"byInbound"`
+	ByUser              []AgentTrafficEntry `json:"byUser"`
+	UnassignedByInbound []AgentTrafficEntry `json:"unassignedByInbound,omitempty"`
+	UpdatedAt           int64               `json:"updatedAt"`
 }
 
 type AgentStatus struct {

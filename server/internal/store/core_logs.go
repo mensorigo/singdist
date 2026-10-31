@@ -180,6 +180,42 @@ func (s *Store) CoreLogsUsedBytes(ctx context.Context) (int64, error) {
 	return used, nil
 }
 
+// ConnectionRecord is one grouped core connection log row, with
+// its log timestamp (unix ms). The traffic collector matches a
+// Clash connection to the record whose timestamp is closest to
+// the Clash connection's start time, so a reused source port is
+// not attributed to a later/earlier connection from the same
+// source address.
+type ConnectionRecord struct {
+	Source string
+	Tag    string
+	User   string
+	Ts     int64
+}
+
+// RecentConnectionRecords returns every grouped connection row at
+// or after sinceMs, oldest first.
+func (s *Store) RecentConnectionRecords(ctx context.Context, sinceMs int64) ([]ConnectionRecord, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT source, tag, user, ts FROM core_logs WHERE kind = 'connection' AND ts >= ? ORDER BY ts ASC`, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ConnectionRecord{}
+	for rows.Next() {
+		var r ConnectionRecord
+		if err := rows.Scan(&r.Source, &r.Tag, &r.User, &r.Ts); err != nil {
+			return nil, err
+		}
+		if r.Source == "" || r.Tag == "" {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // RecentConnections returns, per client source address (IP:port),
 // the latest connection record at or after sinceMs: inbound tag
 // and core username. The traffic collector matches Clash
