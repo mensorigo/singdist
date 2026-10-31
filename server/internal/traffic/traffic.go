@@ -13,6 +13,7 @@ package traffic
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -105,6 +106,13 @@ type Collector struct {
 	clashAPI string
 	st       *store.Store
 	dataPath string
+	// httpClient is created once in New and reused for every
+	// poll. Creating a new Transport per poll (as poll used to
+	// do) leaks one established Clash connection per poll,
+	// because the discarded Transport's idle connections are
+	// never closed: on prod that grew to 2366 sockets in 39
+	// minutes at the 1s poll interval.
+	httpClient *http.Client
 
 	mu      sync.Mutex
 	byKey   map[string]*Entry
@@ -124,10 +132,13 @@ func New(clashAPI string, st *store.Store, dataPath string) *Collector {
 		clashAPI: clashAPI,
 		st:       st,
 		dataPath: dataPath,
-		byKey:    map[string]*Entry{},
-		byInb:    map[string]*Entry{},
-		unByInb:  map[string]*Entry{},
-		active:   map[string]*activeConn{},
+		// Proxy must be nil: a stray proxy env would divert a
+		// loopback Clash request to a dead egress proxy.
+		httpClient: &http.Client{Timeout: 3 * time.Second, Transport: &http.Transport{Proxy: nil}},
+		byKey:      map[string]*Entry{},
+		byInb:      map[string]*Entry{},
+		unByInb:    map[string]*Entry{},
+		active:     map[string]*activeConn{},
 	}
 	c.load()
 	return c

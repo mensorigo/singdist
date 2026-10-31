@@ -3,7 +3,6 @@ package traffic
 import (
 	"context"
 	"encoding/json"
-	"net/http"
 	"strings"
 	"time"
 
@@ -65,11 +64,10 @@ func (c *Collector) poll(ctx context.Context) {
 		latestBySource[r.Source] = r
 	}
 	url := strings.TrimSuffix(c.clashAPI, "/") + "/connections"
-	// Proxy must be nil: a stray proxy env would divert a
-	// loopback Clash request to a dead egress proxy.
-	transport := &http.Transport{Proxy: nil}
-	client := &http.Client{Timeout: 3 * time.Second, Transport: transport}
-	resp, err := client.Get(url)
+	// Shared client from New: do NOT create a client/transport
+	// here, a per-poll Transport leaks one Clash connection
+	// per poll (see Collector.httpClient).
+	resp, err := c.httpClient.Get(url)
 	if err != nil {
 		println("traffic: clash get failed:", err.Error())
 		c.mu.Lock()

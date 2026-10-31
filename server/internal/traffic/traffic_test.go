@@ -40,6 +40,25 @@ func TestLocalCollectorPoll(t *testing.T) {
 	}
 }
 
+func TestCollectorReusesHTTPClient(t *testing.T) {
+	// Regression test for the 2026-10-31 connection leak:
+	// poll used to create a new http.Transport per 1s poll,
+	// leaking one established Clash connection per poll
+	// (2366 sockets in 39 minutes on prod). The client must
+	// be created once in New and reused by every poll.
+	c := New("http://127.0.0.1:9", nil, "")
+	if c.httpClient == nil {
+		t.Fatal("httpClient is nil, New must create a shared client")
+	}
+	first := c.httpClient
+	// Two polls against a dead address must not replace it.
+	c.poll(context.Background())
+	c.poll(context.Background())
+	if c.httpClient != first {
+		t.Fatal("httpClient changed across polls, it must be shared")
+	}
+}
+
 func TestCollectorActivePersistsAcrossRestart(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "traffic.json")
@@ -78,4 +97,3 @@ func TestMatchRecordPicksClosestToStart(t *testing.T) {
 		t.Fatalf("other source = %+v, want nil", m)
 	}
 }
-
