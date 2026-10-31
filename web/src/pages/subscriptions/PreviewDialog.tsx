@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/dialog";
 import { api, ApiError } from "@/lib/api";
 import { copyText } from "./format";
+import i18n from "@/lib/i18n";
 
 export function PreviewDialog({
   subId,
@@ -37,7 +38,7 @@ export function PreviewDialog({
       .catch((err) => {
         if (live) {
           setError(
-            err instanceof ApiError ? err.message : "预览生成失败，请重试",
+            err instanceof ApiError ? err.message : i18n.t('subscriptions.k026'),
           );
         }
       });
@@ -56,7 +57,7 @@ export function PreviewDialog({
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
-            订阅预览 · {name}
+            {i18n.t('subscriptions.k082', { name: name })}
             {format && (
               <span className="ml-2 text-sm font-normal text-muted-foreground">
                 {format === "clash" ? "Clash" : "sing-box JSON"}
@@ -67,7 +68,7 @@ export function PreviewDialog({
         {error ? (
           <p className="text-sm text-destructive">{error}</p>
         ) : content === null ? (
-          <p className="text-sm text-muted-foreground">生成中…</p>
+          <p className="text-sm text-muted-foreground">{i18n.t('subscriptions.k027')}</p>
         ) : (
           <>
             <pre className="max-h-[55vh] overflow-auto rounded-lg border bg-muted/40 p-4 font-mono text-xs leading-relaxed">
@@ -77,13 +78,13 @@ export function PreviewDialog({
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => void copyText(content, "订阅内容已复制")}
+                onClick={() => void copyText(content, i18n.t('subscriptions.k028'))}
               >
                 <Copy className="h-4 w-4" />
-                复制全文
+                {i18n.t('subscriptions.k083')}
               </Button>
               <Button type="button" onClick={onClose}>
-                关闭
+                {i18n.t('subscriptions.k084')}
               </Button>
             </DialogFooter>
           </>

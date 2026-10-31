@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { Segmented } from "./logs/Segmented";
 import { CATEGORIES, LEVELS, RESULTS } from "./logs/constants";
 import { LogRow } from "./logs/LogRow";
+import i18n, { dateLocale } from "@/lib/i18n";
 
 export default function LogsPage({
   refreshSignal,
@@ -69,7 +70,7 @@ export default function LogsPage({
   const formatTs = useCallback(
     (tsMs: number) => {
       try {
-        return new Intl.DateTimeFormat("zh-CN", {
+        return new Intl.DateTimeFormat(dateLocale(), {
           timeZone: timezone,
           year: "numeric",
           month: "2-digit",
@@ -80,7 +81,7 @@ export default function LogsPage({
           hour12: false,
         }).format(new Date(tsMs));
       } catch {
-        return new Date(tsMs).toLocaleString("zh-CN", { hour12: false });
+        return new Date(tsMs).toLocaleString(dateLocale(), { hour12: false });
       }
     },
     [timezone],
@@ -153,14 +154,14 @@ export default function LogsPage({
       }
       if (loadedRef.current) {
         // Background refresh failed: keep the stale rows, say so.
-        toast.error("日志刷新失败，显示的仍是上次的数据");
+        toast.error(i18n.t('logs.k001'));
       } else {
         setEntries([]);
         setNextBefore("");
         setLoadError(
           err instanceof ApiError && err.code === "log_unavailable"
-            ? "核心日志暂时无法读取，请稍后重试"
-            : "日志加载失败，请稍后重试",
+            ? i18n.t('logs.k002')
+            : i18n.t('logs.k003'),
         );
       }
     } finally {
@@ -273,7 +274,7 @@ export default function LogsPage({
       <div className="flex flex-wrap items-center gap-3">
         <Segmented
           value={category}
-          options={CATEGORIES}
+          options={CATEGORIES.map((o) => ({ ...o, label: i18n.t(o.label) }))}
           onChange={(v) => {
             // Switching category clears the list so stale rows from
             // the old category never flash under the new tab; the
@@ -300,22 +301,22 @@ export default function LogsPage({
             }}
             placeholder={
               category === "panel"
-                ? "搜索操作、对象…"
+                ? i18n.t('logs.k004')
                 : category === "connection"
-                  ? "搜索 IP、域名、订阅…"
-                  : "搜索日志内容…"
+                  ? i18n.t('logs.k005')
+                  : i18n.t('logs.k006')
             }
             className="pl-9"
           />
         </div>
         <Button type="button" onClick={applySearch}>
-          搜索
+          {i18n.t('logs.k014')}
         </Button>
         {category === "core" && (
-          <Segmented value={level} options={LEVELS} onChange={setLevel} />
+          <Segmented value={level} options={LEVELS.map((o) => ({ ...o, label: i18n.t(o.label) }))} onChange={setLevel} />
         )}
         {category === "panel" && (
-          <Segmented value={result} options={RESULTS} onChange={setResult} />
+          <Segmented value={result} options={RESULTS.map((o) => ({ ...o, label: i18n.t(o.label) }))} onChange={setResult} />
         )}
         <Button
           type="button"
@@ -330,11 +331,11 @@ export default function LogsPage({
           <RefreshCw
             className={cn("h-4 w-4", loading && "animate-spin")}
           />
-          刷新
+          {i18n.t('logs.k015')}
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        核心与客户端连接来自 sing-box 运行日志；面板操作记录所有面板变更与结果，保留 90 天。
+        {i18n.t('logs.k016')}
       </p>
       {/* One big container for the logs, old-panel style: monospace,
       dense lines, scrollable. Lines stay selectable: copying IPs and
@@ -357,7 +358,7 @@ export default function LogsPage({
             {entries.length === 0 ? (
               loading ? (
                 <p className="px-4 py-8 text-center font-sans text-muted-foreground">
-                  日志加载中…
+                  {i18n.t('logs.k017')}
                 </p>
               ) : loadError ? (
                 <p className="px-4 py-8 text-center font-sans text-destructive">
@@ -365,7 +366,7 @@ export default function LogsPage({
                 </p>
               ) : (
                 <p className="px-4 py-8 text-center font-sans text-muted-foreground">
-                  {keyword || level || result ? "没有匹配的日志" : "暂无日志"}
+                  {keyword || level || result ? i18n.t('logs.k007') : i18n.t('logs.k008')}
                 </p>
               )
             ) : (

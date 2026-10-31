@@ -1,5 +1,6 @@
 import type { DashboardSummary } from "@/lib/api";
 import { formatRate } from "@/lib/format";
+import i18n, { dateLocale } from "@/lib/i18n";
 
 export function TrafficChart({ series }: { series: DashboardSummary["series"] }) {
   const W = 720;
@@ -9,7 +10,7 @@ export function TrafficChart({ series }: { series: DashboardSummary["series"] })
   if (series.length < 2) {
     return (
       <div className="flex h-[170px] items-center justify-center text-[13px] font-medium text-muted-foreground">
-        数据收集中…
+        {i18n.t('dashboard.k032')}
       </div>
     );
   }
@@ -34,7 +35,7 @@ export function TrafficChart({ series }: { series: DashboardSummary["series"] })
         viewBox={`0 0 ${W} ${H}`}
         className="h-auto w-full"
         role="img"
-        aria-label="实时网速曲线"
+        aria-label={i18n.t('dashboard.k020')}
         preserveAspectRatio="none"
       >
         {[1 / 3, 2 / 3].map((f) => {
@@ -75,11 +76,11 @@ export function TrafficChart({ series }: { series: DashboardSummary["series"] })
       </svg>
       <div className="mt-2 flex justify-between text-xs text-muted-foreground">
         <span>
-          {new Date(series[0].ts * 1000).toLocaleTimeString("zh-CN", {
+          {new Date(series[0].ts * 1000).toLocaleTimeString(dateLocale(), {
             hour12: false,
           })}
         </span>
-        <span>现在</span>
+        <span>{i18n.t('dashboard.k021')}</span>
       </div>
     </div>
   );

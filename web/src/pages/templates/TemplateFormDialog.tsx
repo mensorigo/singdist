@@ -23,6 +23,7 @@ import {
   type GroupDraft,
 } from "./group";
 import { GroupFormDialog } from "./GroupFormDialog";
+import i18n from "@/lib/i18n";
 
 // --- template form --------------------------------------------------------------
 
@@ -64,7 +65,7 @@ export function TemplateFormDialog({
   const nodeChips = (ids: number[]) => {
     const nodes = inbounds.filter((ib) => ids.includes(ib.id));
     if (nodes.length === 0)
-      return <span className="text-muted-foreground">（空）</span>;
+      return <span className="text-muted-foreground">{i18n.t('templates.k028')}</span>;
     return (
       <div className="flex flex-wrap gap-1.5">
         {nodes.map((ib) => (
@@ -99,14 +100,14 @@ export function TemplateFormDialog({
       };
       if (creating) {
         await api.templates.create(body);
-        toast.success("模板已创建");
+        toast.success(i18n.t('templates.k029'));
       } else {
         await api.templates.update(item.id, body);
-        toast.success("模板已保存");
+        toast.success(i18n.t('templates.k030'));
       }
       await onSaved();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "保存失败，请重试");
+      setFormError(err instanceof ApiError ? err.message : i18n.t('templates.k031'));
     } finally {
       setSubmitting(false);
     }
@@ -121,33 +122,33 @@ export function TemplateFormDialog({
     >
       <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{creating ? "新建模板" : "编辑模板"}</DialogTitle>
+          <DialogTitle>{creating ? i18n.t('templates.k032') : i18n.t('templates.k033')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="tpl-name">名称</Label>
+            <Label htmlFor="tpl-name">{i18n.t('templates.k034')}</Label>
             <Input
               id="tpl-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例如：全部节点"
+              placeholder={i18n.t('templates.k035')}
               required
             />
           </div>
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label>分组</Label>
+              <Label>{i18n.t('templates.k036')}</Label>
               <Button
                 type="button"
                 variant="outline"
                 className="h-8 rounded-xl px-3"
                 onClick={() => setGroupDialog("new")}
               >
-                新建分组
+                {i18n.t('templates.k054')}
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              第一层只创建和管理分组，不选节点；节点在分组编辑里挑。默认组不能删除、不能改名，但可以点编辑改节点和开关。模板入站 = 所有分组节点的并集。
+              {i18n.t("templates.templateIntro")}
             </p>
             <div className="grid gap-3 sm:grid-cols-3">
               {groups.map((g) => (
@@ -172,8 +173,8 @@ export function TemplateFormDialog({
                       />
                       <button
                         type="button"
-                        title="编辑分组"
-                        aria-label="编辑分组"
+                        title={i18n.t('templates.k037')}
+                        aria-label={i18n.t('templates.k037')}
                         onClick={() => setGroupDialog(g)}
                         className={ICON_BTN_CLS}
                       >
@@ -182,8 +183,8 @@ export function TemplateFormDialog({
                       {!isDefaultGroup(g) && (
                         <button
                           type="button"
-                          title="删除分组"
-                          aria-label="删除分组"
+                          title={i18n.t('templates.k038')}
+                          aria-label={i18n.t('templates.k038')}
                           onClick={() => setPendingGroupDelete(g)}
                           className={ICON_BTN_CLS}
                         >
@@ -194,11 +195,11 @@ export function TemplateFormDialog({
                   </div>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
                     <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                      {GROUP_TYPE_LABEL[g.type]}
+                      {GROUP_TYPE_LABEL[g.type].startsWith("templates.") ? i18n.t(GROUP_TYPE_LABEL[g.type]) : GROUP_TYPE_LABEL[g.type]}
                     </span>
                     {isDefaultGroup(g) && (
                       <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                        系统默认
+                        {i18n.t('templates.k055')}
                       </span>
                     )}
                   </div>
@@ -207,11 +208,11 @@ export function TemplateFormDialog({
               ))}
             </div>
             <p className="text-xs text-muted-foreground">
-              预览：
+              {i18n.t('templates.k056')}
               {groups
                 .filter((g) => g.enabled)
-                .map((g) => `${g.name} ${g.nodeIds.length} 个节点`)
-                .join(" · ") || "（全部关闭，订阅将没有分组）"}
+                .map((g) => i18n.t('templates.k039', { name: g.name, count: g.nodeIds.length }))
+                .join(" · ") || i18n.t('templates.k040')}
             </p>
           </div>
           {formError && (
@@ -224,10 +225,10 @@ export function TemplateFormDialog({
               onClick={onClose}
               disabled={submitting}
             >
-              取消
+              {i18n.t('templates.k057')}
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? "保存中…" : creating ? "创建" : "保存"}
+              {submitting ? i18n.t('templates.k041') : creating ? i18n.t('templates.k042') : i18n.t('templates.k043')}
             </Button>
           </DialogFooter>
         </form>
@@ -253,13 +254,13 @@ export function TemplateFormDialog({
         onOpenChange={(open) => {
           if (!open) setPendingGroupDelete(null);
         }}
-        title="删除分组"
+        title={i18n.t('templates.k038')}
         description={
           pendingGroupDelete
-            ? `确定要删除分组「${pendingGroupDelete.name}」吗？保存模板后订阅里就不再生成它。`
+            ? i18n.t('templates.k044', { value: pendingGroupDelete.name })
             : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={i18n.t('templates.k045')}
         destructive
         onConfirm={() => {
           if (!pendingGroupDelete) return;

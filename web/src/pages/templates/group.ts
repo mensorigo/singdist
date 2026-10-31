@@ -3,10 +3,10 @@ import type { TemplateGroup } from "@/lib/api";
 export type GroupType = "select" | "url-test" | "fallback" | "load-balance";
 
 export const GROUP_TYPE_LABEL: Record<GroupType, string> = {
-  select: "手动选择",
-  "url-test": "自动选择",
-  fallback: "故障转移",
-  "load-balance": "负载均衡",
+  select: "templates.groupType.select",
+  "url-test": "templates.groupType.url-test",
+  fallback: "templates.groupType.fallback",
+  "load-balance": "templates.groupType.load-balance",
 };
 
 export interface GroupDraft {

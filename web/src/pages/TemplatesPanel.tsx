@@ -12,6 +12,7 @@ import {
   type InboundView,
   type TemplateView,
 } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 // TemplatesPanel is the templates view inside the Inbounds page: a
 // template is a named set of inbounds, so it is managed next to the
@@ -58,7 +59,7 @@ export default function TemplatesPanel({
   if (!templates) {
     return (
       <p className="text-sm text-muted-foreground">
-        {loadError ? "暂时无法获取模板数据，请稍后刷新重试" : "数据加载中…"}
+        {loadError ? i18n.t('templates.k001') : i18n.t('templates.k002')}
       </p>
     );
   }
@@ -71,12 +72,12 @@ export default function TemplatesPanel({
   return (
     <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <div className="flex items-center justify-between">
-        <p className="text-base font-semibold">模板（入站集合）</p>
+        <p className="text-base font-semibold">{i18n.t('templates.k003')}</p>
         <Button
           onClick={() => setTplDialog("new")}
           className="h-8 rounded-xl px-3"
         >
-          新建模板
+          {i18n.t('templates.k046')}
         </Button>
       </div>
       {actionError && (
@@ -86,10 +87,10 @@ export default function TemplatesPanel({
         <table className="w-full min-w-[640px] text-sm">
           <thead>
             <tr className="border-b text-left text-xs text-muted-foreground">
-              <th className="py-2 pr-3 font-medium">名称</th>
-              <th className="py-2 pr-3 font-medium">包含入站</th>
-              <th className="py-2 pr-3 font-medium">订阅数</th>
-              <th className="py-2 font-medium">操作</th>
+              <th className="py-2 pr-3 font-medium">{i18n.t('templates.k004')}</th>
+              <th className="py-2 pr-3 font-medium">{i18n.t('templates.k005')}</th>
+              <th className="py-2 pr-3 font-medium">{i18n.t('templates.k006')}</th>
+              <th className="py-2 font-medium">{i18n.t('templates.k007')}</th>
             </tr>
           </thead>
           <tbody>
@@ -107,7 +108,7 @@ export default function TemplatesPanel({
                       </span>
                     ))}
                     {t.inboundIds.length === 0 && (
-                      <span className="text-muted-foreground">（空）</span>
+                      <span className="text-muted-foreground">{i18n.t('templates.k008')}</span>
                     )}
                   </div>
                 </td>
@@ -118,8 +119,8 @@ export default function TemplatesPanel({
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
-                      title="编辑"
-                      aria-label="编辑"
+                      title={i18n.t('templates.k009')}
+                      aria-label={i18n.t('templates.k009')}
                       onClick={() => setTplDialog(t)}
                       className={ICON_BTN_CLS}
                     >
@@ -127,8 +128,8 @@ export default function TemplatesPanel({
                     </button>
                     <button
                       type="button"
-                      title="删除"
-                      aria-label="删除"
+                      title={i18n.t('templates.k010')}
+                      aria-label={i18n.t('templates.k010')}
                       onClick={() => setPendingDelete(t)}
                       className={`${ICON_BTN_CLS}`}
                     >
@@ -144,7 +145,7 @@ export default function TemplatesPanel({
                   colSpan={4}
                   className="py-6 text-center text-sm text-muted-foreground"
                 >
-                  暂无模板，模板是订阅要绑定的入站集合
+                  {i18n.t('templates.k047')}
                 </td>
               </tr>
             )}
@@ -169,13 +170,13 @@ export default function TemplatesPanel({
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
-        title="删除模板"
+        title={i18n.t('templates.k011')}
         description={
           pendingDelete
-            ? `确定要删除模板「${pendingDelete.name}」吗？正在被订阅使用的模板无法删除。`
+            ? i18n.t('templates.k012', { value: pendingDelete.name })
             : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={i18n.t('templates.k010')}
         destructive
         onConfirm={() => {
           if (!pendingDelete) return;
@@ -186,10 +187,10 @@ export default function TemplatesPanel({
             try {
               await api.templates.remove(v.id);
               await refresh();
-              toast.success("模板已删除");
+              toast.success(i18n.t('templates.k013'));
             } catch (err) {
               setActionError(
-                err instanceof ApiError ? err.message : "删除失败，请重试",
+                err instanceof ApiError ? err.message : i18n.t('templates.k014'),
               );
             }
           })();

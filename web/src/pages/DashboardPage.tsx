@@ -20,6 +20,7 @@ import { formatBytes, formatUptime } from "@/lib/format";
 import { DashCard } from "./dashboard/DashCard";
 import { TrendCard } from "./dashboard/TrendCard";
 import { RealtimeCard } from "./dashboard/RealtimeCard";
+import i18n from "@/lib/i18n";
 
 function formatCoreVersion(v: string): string {
   const token = v.replace(/sing-box/i, "").trim().split(/\s+/)[0] ?? "";
@@ -111,7 +112,7 @@ export default function DashboardPage({
   if (!data) {
     return (
       <p className="text-sm text-muted-foreground">
-        {fetchError ? "暂时无法获取数据，正在重试…" : "数据加载中…"}
+        {fetchError ? i18n.t('dashboard.k001') : i18n.t('dashboard.k002')}
       </p>
     );
   }
@@ -131,9 +132,9 @@ export default function DashboardPage({
         >
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <p className="font-medium">sing-box 核心当前不可达</p>
+            <p className="font-medium">{i18n.t('dashboard.k003')}</p>
             <p className="text-destructive/80">
-              流量与连接数据已暂停更新。请检查 sing-box 服务是否正在运行，以及 Clash API 是否可访问。
+              {i18n.t('dashboard.k029')}
             </p>
           </div>
         </div>
@@ -148,57 +149,55 @@ export default function DashboardPage({
           sub={
             data.coreOnline
               ? data.coreUptimeSecs > 0
-                ? `运行中 · 已运行 ${formatUptime(data.coreUptimeSecs)}`
-                : "运行中"
-              : "核心离线"
+                ? i18n.t('dashboard.k004', { value: formatUptime(data.coreUptimeSecs) })
+                : i18n.t('dashboard.k005')
+              : i18n.t('dashboard.k006')
           }
         />
         <DashCard
           icon={<Server className="h-5 w-5" />}
-          label="主机"
+          label={i18n.t('dashboard.k007')}
           value={sys.hostname || "—"}
-          sub={`${sys.os ? `${sys.os} · ` : ""}已运行 ${formatUptime(
-            sys.hostUptimeSecs,
-          )}`}
+          sub={i18n.t("dashboard.running", { os: sys.os ? `${sys.os} · ` : "", uptime: formatUptime(sys.hostUptimeSecs) })}
         />
         <DashCard
           icon={<Cpu className="h-5 w-5" />}
           label="CPU"
           value={`${sys.cpuPercent.toFixed(1)}%`}
-          sub={`负载 ${sys.loadAvg.map((v) => v.toFixed(2)).join(" / ")}`}
+          sub={i18n.t('dashboard.k008', { value: sys.loadAvg.map((v) => v.toFixed(2)).join(" / ") })}
           barPct={sys.cpuPercent}
         />
         <DashCard
           icon={<MemoryStick className="h-5 w-5" />}
-          label="内存"
+          label={i18n.t('dashboard.k009')}
           value={formatBytes(sys.memUsedBytes)}
-          sub={`共 ${formatBytes(sys.memTotalBytes)}`}
+          sub={i18n.t('dashboard.k010', { value: formatBytes(sys.memTotalBytes) })}
           barPct={memPct}
         />
         <DashCard
           icon={<HardDrive className="h-5 w-5" />}
-          label="磁盘"
+          label={i18n.t('dashboard.k011')}
           value={formatBytes(sys.diskUsedBytes)}
-          sub={`共 ${formatBytes(sys.diskTotalBytes)}`}
+          sub={i18n.t('dashboard.k012', { value: formatBytes(sys.diskTotalBytes) })}
           barPct={diskPct}
         />
         <DashCard
           icon={<Database className="h-5 w-5" />}
-          label="总已用流量"
+          label={i18n.t('dashboard.k013')}
           value={formatBytes(data.traffic.totalUp + data.traffic.totalDown)}
-          sub="全订阅累计"
+          sub={i18n.t('dashboard.k014')}
         />
         <DashCard
           icon={<TrendingUp className="h-5 w-5" />}
-          label="今日流量"
+          label={i18n.t('dashboard.k015')}
           value={formatBytes(data.traffic.todayUp + data.traffic.todayDown)}
-          sub={`按 ${data.timezone} 日期`}
+          sub={i18n.t('dashboard.k016', { value: data.timezone })}
         />
         <DashCard
           icon={<Users className="h-5 w-5" />}
-          label="在线设备"
+          label={i18n.t('dashboard.k017')}
           value={online ? String(online.total) : "—"}
-          sub={`共 ${data.activeConns} 条连接`}
+          sub={i18n.t('dashboard.k018', { value: data.activeConns })}
         />
       </div>
 

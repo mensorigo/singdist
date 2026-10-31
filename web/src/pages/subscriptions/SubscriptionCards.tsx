@@ -5,6 +5,7 @@ import { TrafficMeter } from "./TrafficMeter";
 import { UuidCopy } from "./UuidCopy";
 import { expiryCountdown, fmtDate, templateOf } from "./format";
 import type { SubscriptionViewsProps } from "./views";
+import i18n from "@/lib/i18n";
 
 export function SubscriptionCards({
   subs,
@@ -44,7 +45,7 @@ export function SubscriptionCards({
                     <StatusPills v={v} />
                   </div>
                   <p className="mt-1.5 text-xs tabular-nums text-muted-foreground">
-                    在线 IP {onlineCounts?.[v.id] ?? "—"}
+                    {i18n.t('subscriptions.k090', { value: onlineCounts?.[v.id] ?? "—" })}
                   </p>
                 </div>
                 <div className="shrink-0">
@@ -69,13 +70,13 @@ export function SubscriptionCards({
               </div>
               <div className="mt-2 text-[13px] text-muted-foreground">
                 {t.name}
-                {t.inboundCount !== null && ` · ${t.inboundCount} 个入站`}
+                {t.inboundCount !== null && i18n.t('subscriptions.k039', { value: t.inboundCount })}
               </div>
               <div className="mt-1 flex flex-wrap items-center justify-between gap-3 text-[13px] text-muted-foreground">
                 <span className="tabular-nums">
                   {v.expireAt > 0
-                    ? `到期 ${fmtDate(v.expireAt)} · ${cd}`
-                    : "永不过期"}
+                    ? i18n.t('subscriptions.k040', { value: fmtDate(v.expireAt), cd: cd })
+                    : i18n.t('subscriptions.k041')}
                 </span>
                 <UuidCopy v={v} />
               </div>
@@ -84,9 +85,9 @@ export function SubscriptionCards({
           })}
           {subs.length === 0 && (
             <p className="col-span-full py-6 text-center text-sm text-muted-foreground">
-              暂无订阅，点右上角「新建订阅」创建
+              {i18n.t('subscriptions.k091')}
               {templates.length === 0 &&
-                "（需要先在「入站 → 模板」中新建模板）"}
+                i18n.t('subscriptions.k042')}
             </p>
           )}
         </div>

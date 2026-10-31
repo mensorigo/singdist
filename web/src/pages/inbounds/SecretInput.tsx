@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Eye, EyeOff } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import i18n from "@/lib/i18n";
 
 export function SecretInput({
   id,
@@ -27,7 +28,7 @@ export function SecretInput({
       />
       <button
         type="button"
-        aria-label={show ? "隐藏" : "显示"}
+        aria-label={show ? i18n.t('inbounds.k049') : i18n.t('inbounds.k050')}
         onClick={() => setShow((s) => !s)}
         className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground transition-colors hover:text-foreground"
       >

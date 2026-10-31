@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api";
 import { PemField } from "./PemField";
+import i18n from "@/lib/i18n";
 
 export function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) {
   const [certPem, setCertPem] = useState("");
@@ -25,10 +26,10 @@ export function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) 
       setKeyPem("");
       setNote("");
       setActivate(false);
-      setFormSuccess(activate ? "证书已保存并启用" : "证书已保存");
+      setFormSuccess(activate ? i18n.t('certificates.k044') : i18n.t('certificates.k045'));
       await onUploaded();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "上传失败，请重试");
+      setFormError(err instanceof ApiError ? err.message : i18n.t('certificates.k046'));
     } finally {
       setSubmitting(false);
     }
@@ -36,12 +37,12 @@ export function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) 
 
   return (
     <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
-      <p className="text-base font-semibold">上传新证书</p>
+      <p className="text-base font-semibold">{i18n.t('certificates.k047')}</p>
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
         <div className="grid gap-4 md:grid-cols-2">
           <PemField
             id="cert-pem"
-            label="证书 PEM"
+            label={i18n.t('certificates.k048')}
             placeholder="-----BEGIN CERTIFICATE-----"
             value={certPem}
             onChange={setCertPem}
@@ -49,7 +50,7 @@ export function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) 
           />
           <PemField
             id="key-pem"
-            label="私钥 PEM"
+            label={i18n.t('certificates.k049')}
             placeholder="-----BEGIN PRIVATE KEY-----"
             value={keyPem}
             onChange={setKeyPem}
@@ -57,12 +58,12 @@ export function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) 
           />
         </div>
         <div className="space-y-2">
-          <Label htmlFor="cert-note">备注（可选）</Label>
+          <Label htmlFor="cert-note">{i18n.t('certificates.k050')}</Label>
           <Input
             id="cert-note"
             value={note}
             onChange={(e) => setNote(e.target.value)}
-            placeholder="不填则自动编号，如 CERT-8F3K"
+            placeholder={i18n.t('certificates.k051')}
           />
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
@@ -72,7 +73,7 @@ export function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) 
             onChange={(e) => setActivate(e.target.checked)}
             className="h-4 w-4 rounded border accent-primary"
           />
-          保存并立即启用
+          {i18n.t('certificates.k064')}
         </label>
         {formError && <p className="text-[13px] text-destructive">{formError}</p>}
         {formSuccess && (
@@ -81,7 +82,7 @@ export function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) 
           </p>
         )}
         <Button type="submit" disabled={submitting}>
-          {submitting ? "上传中…" : "上传证书"}
+          {submitting ? i18n.t('certificates.k052') : i18n.t('certificates.k053')}
         </Button>
       </form>
     </section>

@@ -5,6 +5,7 @@ import { TrafficMeter } from "./TrafficMeter";
 import { UuidCopy } from "./UuidCopy";
 import { expiryCountdown, fmtDate, templateOf } from "./format";
 import type { SubscriptionViewsProps } from "./views";
+import i18n from "@/lib/i18n";
 
 export function SubscriptionTable({
   subs,
@@ -24,14 +25,14 @@ export function SubscriptionTable({
           <table className="w-full min-w-[980px] text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">订阅</th>
-                <th className="py-2 pr-3 font-medium">模板</th>
-                <th className="py-2 pr-3 font-medium">状态</th>
-                <th className="py-2 pr-3 font-medium">在线 IP</th>
-                <th className="py-2 pr-3 font-medium">流量</th>
-                <th className="py-2 pr-3 font-medium">到期</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('subscriptions.k064')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('subscriptions.k065')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('subscriptions.k066')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('subscriptions.k067')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('subscriptions.k068')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('subscriptions.k069')}</th>
                 <th className="py-2 pr-3 font-medium">UUID</th>
-                <th className="py-2 text-right font-medium">操作</th>
+                <th className="py-2 text-right font-medium">{i18n.t('subscriptions.k070')}</th>
               </tr>
             </thead>
             <tbody>
@@ -110,8 +111,8 @@ export function SubscriptionTable({
                     colSpan={8}
                     className="py-6 text-center text-sm text-muted-foreground"
                   >
-                    暂无订阅，点右上角「新建订阅」创建
-                    {templates.length === 0 && "（需要先在「入站 → 模板」中新建模板）"}
+                    {i18n.t('subscriptions.k099')}
+                    {templates.length === 0 && i18n.t('subscriptions.k071')}
                   </td>
                 </tr>
               )}

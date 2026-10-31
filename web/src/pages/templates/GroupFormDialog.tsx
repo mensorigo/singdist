@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { InboundView } from "@/lib/api";
 import { GROUP_TYPE_LABEL, isDefaultGroup, type GroupDraft, type GroupType } from "./group";
+import i18n from "@/lib/i18n";
 
 const PROTOCOL_LABEL: Record<string, string> = {
   "vless-reality": "VLESS · Reality",
@@ -53,7 +54,7 @@ export function GroupFormDialog({
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (gName.trim() === "") {
-      setGError("请填分组名字");
+      setGError(i18n.t('templates.k015'));
       return;
     }
     onSaved({
@@ -77,23 +78,23 @@ export function GroupFormDialog({
     >
       <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{creating ? "新建分组" : "编辑分组"}</DialogTitle>
+          <DialogTitle>{creating ? i18n.t('templates.k016') : i18n.t('templates.k017')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
             <Label htmlFor="grp-name">
-              分组名字{defaultGroup ? "（系统默认，不可改）" : ""}
+              {i18n.t('templates.k048', { value: defaultGroup ? i18n.t('templates.k018') : "" })}
             </Label>
             <Input
               id="grp-name"
               value={gName}
               onChange={(e) => setGName(e.target.value)}
-              placeholder="例如：香港组"
+              placeholder={i18n.t('templates.k019')}
               disabled={defaultGroup}
             />
           </div>
           <div className="space-y-2">
-            <Label>类型</Label>
+            <Label>{i18n.t('templates.k020')}</Label>
             <Select
               value={gType}
               onValueChange={(v) => setGType(v as GroupType)}
@@ -105,7 +106,7 @@ export function GroupFormDialog({
               <SelectContent>
                 {(Object.keys(GROUP_TYPE_LABEL) as GroupType[]).map((t) => (
                   <SelectItem key={t} value={t}>
-                    {GROUP_TYPE_LABEL[t]}
+                    {GROUP_TYPE_LABEL[t].startsWith("templates.") ? i18n.t(GROUP_TYPE_LABEL[t]) : GROUP_TYPE_LABEL[t]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -113,7 +114,7 @@ export function GroupFormDialog({
           </div>
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>包含的节点</Label>
+              <Label>{i18n.t('templates.k021')}</Label>
               <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                 <input
                   type="checkbox"
@@ -128,7 +129,7 @@ export function GroupFormDialog({
                   }
                   className="h-4 w-4 accent-primary"
                 />
-                全选
+                {i18n.t('templates.k049')}
               </label>
             </div>
             <div className="max-h-[220px] space-y-1.5 overflow-y-auto pr-1">
@@ -151,26 +152,26 @@ export function GroupFormDialog({
                   />
                   <span className="font-medium">{ib.name}</span>
                   <span className="text-xs text-muted-foreground">
-                    {PROTOCOL_LABEL[ib.protocol] ?? ib.protocol} · 端口{" "}
+                    {i18n.t('templates.k050', { value: PROTOCOL_LABEL[ib.protocol] ?? ib.protocol })}
                     {ib.port}
-                    {!ib.enabled && " · 已停用"}
+                    {!ib.enabled && i18n.t('templates.k022')}
                   </span>
                 </label>
               ))}
               {inbounds.length === 0 && (
                 <p className="text-sm text-muted-foreground">
-                  暂无入站，请先在「入站」视图创建
+                  {i18n.t('templates.k051')}
                 </p>
               )}
             </div>
           </div>
           <details className="space-y-2">
             <summary className="cursor-pointer text-sm text-muted-foreground">
-              高级（测速地址、间隔、容差）
+              {i18n.t('templates.k052')}
             </summary>
             <div className="space-y-2 pt-1">
               <div className="space-y-2">
-                <Label htmlFor="grp-url">测速地址</Label>
+                <Label htmlFor="grp-url">{i18n.t('templates.k023')}</Label>
                 <Input
                   id="grp-url"
                   value={gUrl}
@@ -179,7 +180,7 @@ export function GroupFormDialog({
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-2">
-                  <Label htmlFor="grp-interval">间隔（秒）</Label>
+                  <Label htmlFor="grp-interval">{i18n.t('templates.k024')}</Label>
                   <Input
                     id="grp-interval"
                     type="number"
@@ -188,7 +189,7 @@ export function GroupFormDialog({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="grp-tolerance">容差（毫秒）</Label>
+                  <Label htmlFor="grp-tolerance">{i18n.t('templates.k025')}</Label>
                   <Input
                     id="grp-tolerance"
                     type="number"
@@ -204,9 +205,9 @@ export function GroupFormDialog({
           )}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>
-              取消
+              {i18n.t('templates.k053')}
             </Button>
-            <Button type="submit">{creating ? "添加" : "保存"}</Button>
+            <Button type="submit">{creating ? i18n.t('templates.k026') : i18n.t('templates.k027')}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

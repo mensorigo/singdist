@@ -4,6 +4,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SecretInput } from "../SecretInput";
 import { randomHex } from "../helpers";
+import i18n from "@/lib/i18n";
 
 interface RealityFieldsProps {
   sni: string;
@@ -40,7 +41,7 @@ export function RealityFields({
             <>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="inb-sni">SNI（伪装域名）</Label>
+                  <Label htmlFor="inb-sni">{i18n.t('inbounds.fields.k013')}</Label>
                   <Input
                     id="inb-sni"
                     value={sni}
@@ -60,26 +61,26 @@ export function RealityFields({
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="inb-priv">Reality 私钥</Label>
+                  <Label htmlFor="inb-priv">{i18n.t('inbounds.fields.k014')}</Label>
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => void genKeypair()}
                     className="h-7 rounded-lg px-2 text-xs"
                   >
-                    生成新密钥对
+                    {i18n.t('inbounds.fields.k032')}
                   </Button>
                 </div>
                 <SecretInput
                   id="inb-priv"
                   value={privateKey}
                   onChange={setPrivateKey}
-                  placeholder="留空则创建时自动生成"
+                  placeholder={i18n.t('inbounds.fields.k015')}
                 />
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="inb-pub">Reality 公钥</Label>
+                  <Label htmlFor="inb-pub">{i18n.t('inbounds.fields.k016')}</Label>
                   <Button
                     type="button"
                     variant="outline"
@@ -92,14 +93,14 @@ export function RealityFields({
                     ) : (
                       <Copy className="h-3.5 w-3.5" />
                     )}
-                    复制
+                    {i18n.t('inbounds.fields.k033')}
                   </Button>
                 </div>
                 <Input
                   id="inb-pub"
                   value={publicKey}
                   onChange={(e) => setPublicKey(e.target.value)}
-                  placeholder="与私钥配对，生成密钥对时自动填入"
+                  placeholder={i18n.t('inbounds.fields.k017')}
                   className="font-mono text-xs"
                 />
               </div>
@@ -112,14 +113,14 @@ export function RealityFields({
                     onClick={() => setShortId(randomHex(4))}
                     className="h-7 rounded-lg px-2 text-xs"
                   >
-                    随机生成
+                    {i18n.t('inbounds.fields.k034')}
                   </Button>
                 </div>
                 <Input
                   id="inb-sid"
                   value={shortId}
                   onChange={(e) => setShortId(e.target.value)}
-                  placeholder="8 位十六进制，可留空自动生成"
+                  placeholder={i18n.t('inbounds.fields.k018')}
                   className="font-mono text-xs"
                 />
               </div>

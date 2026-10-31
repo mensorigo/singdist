@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import type { SubscriptionView, TemplateView } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 export function expiryCountdown(expireAt: number): string {
   if (expireAt <= 0) return "";
@@ -9,9 +10,9 @@ export function expiryCountdown(expireAt: number): string {
   const exp = new Date(expireAt * 1000);
   exp.setHours(0, 0, 0, 0);
   const diff = Math.round((exp.getTime() - today.getTime()) / day);
-  if (diff < 0) return `已过期 ${-diff} 天`;
-  if (diff === 0) return "今天到期";
-  return `剩 ${diff} 天`;
+  if (diff < 0) return i18n.t('subscriptions.k075', { value: -diff });
+  if (diff === 0) return i18n.t('subscriptions.k076');
+  return i18n.t('subscriptions.k077', { diff: diff });
 }
 
 // Template name + inbound count for a subscription; falls back to the
@@ -24,7 +25,7 @@ export function templateOf(v: SubscriptionView, templates: TemplateView[]) {
 }
 
 export function fmtDate(unix: number): string {
-  if (unix === 0) return "永不过期";
+  if (unix === 0) return i18n.t('subscriptions.k078');
   const d = new Date(unix * 1000);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -76,6 +77,6 @@ export async function copyText(text: string, okMsg: string) {
     await navigator.clipboard.writeText(text);
     toast.success(okMsg);
   } catch {
-    toast.error("复制失败，请手动复制");
+    toast.error(i18n.t('subscriptions.k079'));
   }
 }

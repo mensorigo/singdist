@@ -1,3 +1,4 @@
+import i18n from "@/lib/i18n";
 // customSelectOption returns the temporary "custom" option for a Select
 // whose current value is not among its fixed options, or null when the
 // current value is already listed (or empty).
@@ -15,5 +16,5 @@ export function customSelectOption(
   if (currentValue === "" || fixedOptions.includes(currentValue)) {
     return null;
   }
-  return { value: currentValue, label: `${currentValue}（自定义）` };
+  return { value: currentValue, label: i18n.t('common.k009', { currentValue: currentValue }) };
 }

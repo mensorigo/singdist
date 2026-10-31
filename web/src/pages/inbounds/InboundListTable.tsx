@@ -7,6 +7,7 @@ import { ICON_BTN_CLS, PROTOCOL_LABEL, PROTOCOL_TRANSPORT } from "./constants";
 import { DiffsList } from "./DiffsList";
 import { StatusBadge } from "./StatusBadge";
 import type { MachineInfo } from "./constants";
+import i18n from "@/lib/i18n";
 
 export function InboundListTable({
   items,
@@ -32,12 +33,12 @@ export function InboundListTable({
   return (
       <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
         <div className="flex items-center justify-between">
-          <p className="text-base font-semibold">入站列表</p>
+          <p className="text-base font-semibold">{i18n.t('inbounds.k037')}</p>
           <Button
             onClick={onCreate}
             className="h-8 rounded-xl px-3"
           >
-            新建入站
+            {i18n.t('inbounds.k069')}
           </Button>
         </div>
         {actionError && (
@@ -47,14 +48,14 @@ export function InboundListTable({
           <table className="w-full min-w-[920px] text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">名称</th>
-                <th className="py-2 pr-3 font-medium">运行机器</th>
-                <th className="py-2 pr-3 font-medium">机器IP</th>
-                <th className="py-2 pr-3 font-medium">端口</th>
-                <th className="py-2 pr-3 font-medium">协议</th>
-                <th className="py-2 pr-3 font-medium">传输</th>
-                <th className="py-2 pr-3 font-medium">状态</th>
-                <th className="py-2 font-medium">操作</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('inbounds.k038')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('inbounds.k039')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('inbounds.k040')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('inbounds.k041')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('inbounds.k042')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('inbounds.k043')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('inbounds.k044')}</th>
+                <th className="py-2 font-medium">{i18n.t('inbounds.k045')}</th>
               </tr>
             </thead>
             <tbody>
@@ -69,7 +70,7 @@ export function InboundListTable({
                     {v.name}
                   </td>
                   <td className="py-2.5 pr-3">
-                    {machines[v.id]?.name ?? (v.runLocal ? "本机" : "—")}
+                    {machines[v.id]?.name ?? (v.runLocal ? i18n.t('inbounds.k046') : "—")}
                   </td>
                   <td className="py-2.5 pr-3 tabular-nums">
                     {machines[v.id]?.ip ?? "—"}
@@ -106,8 +107,8 @@ export function InboundListTable({
                       />
                       <button
                         type="button"
-                        title="编辑"
-                        aria-label="编辑"
+                        title={i18n.t('inbounds.k047')}
+                        aria-label={i18n.t('inbounds.k047')}
                         disabled={busyId === v.id}
                         onClick={() => onEdit(v)}
                         className={`${ICON_BTN_CLS} disabled:opacity-50`}
@@ -116,8 +117,8 @@ export function InboundListTable({
                       </button>
                       <button
                         type="button"
-                        title="删除"
-                        aria-label="删除"
+                        title={i18n.t('inbounds.k048')}
+                        aria-label={i18n.t('inbounds.k048')}
                         disabled={busyId === v.id}
                         onClick={() => onDelete(v)}
                         className={`${ICON_BTN_CLS} disabled:opacity-50`}
@@ -134,7 +135,7 @@ export function InboundListTable({
                     colSpan={8}
                     className="py-6 text-center text-sm text-muted-foreground"
                   >
-                    暂无入站，点右上角「新建入站」创建
+                    {i18n.t('inbounds.k070')}
                   </td>
                 </tr>
               )}

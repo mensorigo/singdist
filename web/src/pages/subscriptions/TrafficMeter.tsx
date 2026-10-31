@@ -1,6 +1,7 @@
 import type { SubscriptionView } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { fmtBytes2 } from "./format";
+import i18n from "@/lib/i18n";
 
 export function TrafficMeter({
   v,
@@ -32,7 +33,7 @@ export function TrafficMeter({
         {fmtBytes2(v.usedBytes)} /{" "}
         {v.limitBytes > 0
           ? `${fmtBytes2(v.limitBytes)} · ${pct.toFixed(1)}%`
-          : "不限"}
+          : i18n.t('subscriptions.k072')}
       </span>
     </div>
   );

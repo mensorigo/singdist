@@ -12,6 +12,7 @@ import TemplatesPanel from "@/pages/TemplatesPanel";
 import { InboundFormDialog } from "./inbounds/InboundFormDialog";
 import { InboundListTable } from "./inbounds/InboundListTable";
 import type { MachineInfo } from "./inbounds/constants";
+import i18n from "@/lib/i18n";
 
 export default function InboundsPage({
   refreshSignal,
@@ -52,7 +53,7 @@ export default function InboundsPage({
             data.items.map(async (v) => {
               if (v.runLocal) {
                 info[v.id] = {
-                  name: lm.hostname || "本机",
+                  name: lm.hostname || i18n.t('inbounds.k001'),
                   ip: lm.ip || "—",
                   port: v.port,
                 };
@@ -105,10 +106,10 @@ export default function InboundsPage({
       try {
         await api.inbounds.remove(v.id);
         await refresh();
-        toast.success("入站已删除");
+        toast.success(i18n.t('inbounds.k002'));
       } catch (err) {
         setActionError(
-          err instanceof ApiError ? err.message : "删除失败，请重试",
+          err instanceof ApiError ? err.message : i18n.t('inbounds.k003'),
         );
       } finally {
         setBusyId(null);
@@ -123,10 +124,10 @@ export default function InboundsPage({
       try {
         await api.inbounds.setEnabled(v.id, !v.enabled);
         await refresh();
-        toast.success(v.enabled ? "入站已停用" : "入站已启用");
+        toast.success(v.enabled ? i18n.t('inbounds.k004') : i18n.t('inbounds.k005'));
       } catch (err) {
         setActionError(
-          err instanceof ApiError ? err.message : "操作失败，请重试",
+          err instanceof ApiError ? err.message : i18n.t('inbounds.k006'),
         );
       } finally {
         setBusyId(null);
@@ -138,8 +139,8 @@ export default function InboundsPage({
     <div className="inline-flex rounded-xl bg-muted p-1">
       {(
         [
-          ["inbounds", "入站"],
-          ["templates", "模板"],
+          ["inbounds", i18n.t('inbounds.k007')],
+          ["templates", i18n.t('inbounds.k008')],
         ] as const
       ).map(([key, label]) => (
         <button
@@ -167,7 +168,7 @@ export default function InboundsPage({
           <TemplatesPanel refreshSignal={refreshSignal} />
         ) : (
           <p className="text-sm text-muted-foreground">
-            {loadError ? "暂时无法获取入站数据，请稍后刷新重试" : "数据加载中…"}
+            {loadError ? i18n.t('inbounds.k009') : i18n.t('inbounds.k010')}
           </p>
         )}
       </div>
@@ -190,17 +191,17 @@ export default function InboundsPage({
         <>
       {showWarnings && !list.runningAvailable && (
         <div className="rounded-[18px] border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-700 dark:text-amber-300">
-          无法读取核心的运行配置，本页仅显示面板记录，同步状态不可用。
+          {i18n.t('inbounds.k060')}
         </div>
       )}
       {showWarnings && list.runningAvailable && outOfSync > 0 && (
         <div className="rounded-[18px] border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-[13px] text-amber-700 dark:text-amber-300">
-          有 {outOfSync} 个入站与运行配置不一致 — 面板记录是期望状态，点顶栏的同步图标应用。
+          {i18n.t('inbounds.k061', { outOfSync: outOfSync })}
         </div>
       )}
       {list.extras.length > 0 && (
         <div className="rounded-[18px] border bg-card px-4 py-3 text-[13px] text-muted-foreground shadow-sm">
-          核心正在运行、但面板尚未纳管的入站：
+          {i18n.t('inbounds.k062')}
           {list.extras
             .map((e) => `${e.tag || e.type}（${e.type}:${e.port}）`)
             .join("、")}
@@ -239,13 +240,13 @@ export default function InboundsPage({
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
-        title="删除入站"
+        title={i18n.t('inbounds.k011')}
         description={
           pendingDelete
-            ? `确定要删除入站「${pendingDelete.name}」吗？此操作只删除面板记录，核心配置会在下次同步时移除该入站。`
+            ? i18n.t('inbounds.k012', { value: pendingDelete.name })
             : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={i18n.t('inbounds.k013')}
         destructive
         onConfirm={confirmDelete}
       />

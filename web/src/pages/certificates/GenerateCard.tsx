@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 // One-click self-signed certificate: the name is the address the admin
 // is using to view this page right now (domain or IP), validity 365
@@ -24,12 +25,12 @@ export function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void>
       const info = await api.certs.selfSigned([host], 365, note.trim(), false);
       setNote("");
       setFormSuccess(
-        `已生成：${info.commonName}（有效期 ${info.daysLeft} 天），已存入上方版本列表，需要时点“启用”即可切换`,
+        i18n.t('certificates.k034', { name: info.commonName, days: info.daysLeft }),
       );
-      toast.success("证书生成成功");
+      toast.success(i18n.t('certificates.k035'));
       await onGenerated();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "生成失败，请重试");
+      setFormError(err instanceof ApiError ? err.message : i18n.t('certificates.k036'));
     } finally {
       setSubmitting(false);
     }
@@ -37,18 +38,18 @@ export function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void>
 
   return (
     <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
-      <p className="text-base font-semibold">生成自签名证书</p>
+      <p className="text-base font-semibold">{i18n.t('certificates.k037')}</p>
       <p className="mt-1 text-[13px] text-muted-foreground">
-        按你当前访问面板的地址（域名或 IP）一键生成一张自签名证书，有效期
-        365 天。生成后会进入上方版本列表，不会自动切换当前证书。
+        {i18n.t('certificates.k060')}
+        {i18n.t('certificates.k061')}
       </p>
       <div className="mt-4 max-w-md space-y-2">
-        <Label htmlFor="ss-note">备注名（可选）</Label>
+        <Label htmlFor="ss-note">{i18n.t('certificates.k038')}</Label>
         <Input
           id="ss-note"
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          placeholder="不填则自动编号，如 CERT-8F3K"
+          placeholder={i18n.t('certificates.k039')}
         />
       </div>
       {formError && <p className="mt-3 text-[13px] text-destructive">{formError}</p>}
@@ -58,7 +59,7 @@ export function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void>
         </p>
       )}
       <Button className="mt-4" onClick={handleGenerate} disabled={submitting}>
-        {submitting ? "生成中…" : "一键生成自签名证书"}
+        {submitting ? i18n.t('certificates.k040') : i18n.t('certificates.k041')}
       </Button>
     </section>
   );

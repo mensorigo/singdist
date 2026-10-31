@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import i18n, { dateLocale } from "@/lib/i18n";
 
 export function formatDateTime(unix: number): string {
   if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleString("zh-CN", { hour12: false });
+  return new Date(unix * 1000).toLocaleString(dateLocale(), { hour12: false });
 }
 
 // Row action trigger style, verbatim mirror of the SubscriptionsPage
@@ -15,7 +16,7 @@ export const ICON_BTN_CLS =
 
 export function formatDate(unix: number): string {
   if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleDateString("zh-CN");
+  return new Date(unix * 1000).toLocaleDateString(dateLocale());
 }
 
 export function DaysBadge({
@@ -30,7 +31,7 @@ export function DaysBadge({
   if (expired) {
     return (
       <span className="inline-flex rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
-        已过期
+        {i18n.t('certificates.k065')}
       </span>
     );
   }
@@ -49,7 +50,7 @@ export function DaysBadge({
         cls,
       )}
     >
-      {daysLeft} 天
+      {i18n.t('certificates.k066', { daysLeft: daysLeft })}
     </span>
   );
 }

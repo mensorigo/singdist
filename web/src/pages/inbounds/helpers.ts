@@ -1,4 +1,5 @@
 import type { LocalMachine } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 export function randomHex(bytes: number): string {
   const a = new Uint8Array(bytes);
@@ -12,7 +13,7 @@ export function randomHex(bytes: number): string {
 // opacity-50 for affordance.
 
 export function formatLocalLabel(lm: LocalMachine): string {
-  if (!lm.hostname) return "本机";
+  if (!lm.hostname) return i18n.t('inbounds.k059');
   if (lm.ip && lm.port > 0) return `${lm.hostname}（${lm.ip}:${lm.port}）`;
   if (lm.ip) return `${lm.hostname}（${lm.ip}）`;
   return lm.hostname;

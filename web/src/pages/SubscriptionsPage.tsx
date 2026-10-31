@@ -14,6 +14,7 @@ import { SubscriptionFormDialog } from "./subscriptions/SubscriptionFormDialog";
 import { SubscriptionTable } from "./subscriptions/SubscriptionTable";
 import { SubscriptionCards } from "./subscriptions/SubscriptionCards";
 import { copyText } from "./subscriptions/format";
+import i18n from "@/lib/i18n";
 
 export default function SubscriptionsPage({
   refreshSignal,
@@ -116,14 +117,14 @@ export default function SubscriptionsPage({
       await refresh();
       toast.success(okMsg);
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "操作失败，请重试");
+      setActionError(err instanceof ApiError ? err.message : i18n.t('subscriptions.k001'));
     }
   };
 
   if (!subs) {
     return (
       <p className="text-sm text-muted-foreground">
-        {loadError ? "暂时无法获取订阅数据，请稍后刷新重试" : "数据加载中…"}
+        {loadError ? i18n.t('subscriptions.k002') : i18n.t('subscriptions.k003')}
       </p>
     );
   }
@@ -139,23 +140,23 @@ export default function SubscriptionsPage({
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-[18px] border bg-card px-4 py-3 shadow-sm">
         <div className="flex flex-wrap items-center gap-6">
           <div>
-            <p className="text-xs text-muted-foreground">订阅总数</p>
+            <p className="text-xs text-muted-foreground">{i18n.t('subscriptions.k004')}</p>
             <p className="text-base font-semibold">{subs?.length ?? "—"}</p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">启用中</p>
+            <p className="text-xs text-muted-foreground">{i18n.t('subscriptions.k005')}</p>
             <p className="text-base font-semibold">
               {subs ? subs.filter((v) => v.enabled).length : "—"}
             </p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">已停用</p>
+            <p className="text-xs text-muted-foreground">{i18n.t('subscriptions.k006')}</p>
             <p className="text-base font-semibold">
               {subs ? subs.filter((v) => !v.enabled).length : "—"}
             </p>
           </div>
           <div>
-            <p className="text-xs text-muted-foreground">在线 IP 总数</p>
+            <p className="text-xs text-muted-foreground">{i18n.t('subscriptions.k007')}</p>
             <p className="text-base font-semibold">
               {onlineCounts
                 ? Object.values(onlineCounts).reduce((s, c) => s + c, 0)
@@ -170,8 +171,8 @@ export default function SubscriptionsPage({
           <div className="inline-flex rounded-xl bg-muted p-1">
             {(
               [
-                ["list", "列表"],
-                ["card", "卡片"],
+                ["list", i18n.t('subscriptions.k008')],
+                ["card", i18n.t('subscriptions.k009')],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -193,7 +194,7 @@ export default function SubscriptionsPage({
             onClick={() => setSubDialog("new")}
             className="h-8 rounded-xl px-3"
           >
-            新建订阅
+            {i18n.t('subscriptions.k081')}
           </Button>
         </div>
       </div>
@@ -205,7 +206,7 @@ export default function SubscriptionsPage({
           subs={subs}
           templates={templates}
           onlineCounts={onlineCounts}
-          onCopyLink={(v) => void copyText(subLink(v), "订阅链接已复制")}
+          onCopyLink={(v) => void copyText(subLink(v), i18n.t('subscriptions.k010'))}
           onQr={(v) => setQrSub(v)}
           onEdit={(v) => setSubDialog(v)}
           onResetLink={(v) => setPendingResetLink(v)}
@@ -214,7 +215,7 @@ export default function SubscriptionsPage({
             void runAction(
               v.id,
               () => api.subscriptions.setEnabled(v.id, !v.enabled),
-              v.enabled ? "订阅已停用" : "订阅已启用",
+              v.enabled ? i18n.t('subscriptions.k011') : i18n.t('subscriptions.k012'),
             )
           }
           onDelete={(v) => setPendingDeleteSub(v)}
@@ -224,7 +225,7 @@ export default function SubscriptionsPage({
           subs={subs}
           templates={templates}
           onlineCounts={onlineCounts}
-          onCopyLink={(v) => void copyText(subLink(v), "订阅链接已复制")}
+          onCopyLink={(v) => void copyText(subLink(v), i18n.t('subscriptions.k010'))}
           onQr={(v) => setQrSub(v)}
           onEdit={(v) => setSubDialog(v)}
           onResetLink={(v) => setPendingResetLink(v)}
@@ -233,7 +234,7 @@ export default function SubscriptionsPage({
             void runAction(
               v.id,
               () => api.subscriptions.setEnabled(v.id, !v.enabled),
-              v.enabled ? "订阅已停用" : "订阅已启用",
+              v.enabled ? i18n.t('subscriptions.k011') : i18n.t('subscriptions.k012'),
             )
           }
           onDelete={(v) => setPendingDeleteSub(v)}
@@ -258,19 +259,19 @@ export default function SubscriptionsPage({
         onOpenChange={(open) => {
           if (!open) setPendingDeleteSub(null);
         }}
-        title="删除订阅"
+        title={i18n.t('subscriptions.k013')}
         description={
           pendingDeleteSub
-            ? `确定要删除订阅「${pendingDeleteSub.name}」吗？删除后该订阅的链接将不可用。`
+            ? i18n.t('subscriptions.k014', { value: pendingDeleteSub.name })
             : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={i18n.t('subscriptions.k015')}
         destructive
         onConfirm={() => {
           if (!pendingDeleteSub) return;
           const v = pendingDeleteSub;
           setPendingDeleteSub(null);
-          void runAction(v.id, () => api.subscriptions.remove(v.id), "订阅已删除");
+          void runAction(v.id, () => api.subscriptions.remove(v.id), i18n.t('subscriptions.k016'));
         }}
       />
       <ConfirmDialog
@@ -278,13 +279,13 @@ export default function SubscriptionsPage({
         onOpenChange={(open) => {
           if (!open) setPendingResetLink(null);
         }}
-        title="更换订阅链接"
+        title={i18n.t('subscriptions.k017')}
         description={
           pendingResetLink
-            ? `确定要更换订阅「${pendingResetLink.name}」的链接吗？旧链接将立即失效；已导入的客户端可继续连接，但更新订阅需换用新链接。`
+            ? i18n.t('subscriptions.k018', { value: pendingResetLink.name })
             : ""
         }
-        confirmLabel="更换"
+        confirmLabel={i18n.t('subscriptions.k019')}
         destructive
         onConfirm={() => {
           if (!pendingResetLink) return;
@@ -293,7 +294,7 @@ export default function SubscriptionsPage({
           void runAction(
             v.id,
             () => api.subscriptions.resetToken(v.id),
-            "链接已更换，旧链接已失效",
+            i18n.t('subscriptions.k020'),
           );
         }}
       />
@@ -302,13 +303,13 @@ export default function SubscriptionsPage({
         onOpenChange={(open) => {
           if (!open) setPendingResetAll(null);
         }}
-        title="重置订阅链接"
+        title={i18n.t('subscriptions.k021')}
         description={
           pendingResetAll
-            ? `确定要重置订阅「${pendingResetAll.name}」吗？将同时更换订阅链接和 UUID，旧链接与旧配置立即失效，所有用户需重新订阅。`
+            ? i18n.t('subscriptions.k022', { value: pendingResetAll.name })
             : undefined
         }
-        confirmLabel="重置"
+        confirmLabel={i18n.t('subscriptions.k023')}
         destructive
         onConfirm={() => {
           if (!pendingResetAll) return;
@@ -324,7 +325,7 @@ export default function SubscriptionsPage({
               await api.subscriptions.resetUuid(v.id);
             } catch (err) {
               setActionError(
-                err instanceof ApiError ? err.message : "操作失败，请重试",
+                err instanceof ApiError ? err.message : i18n.t('subscriptions.k001'),
               );
               return;
             }
@@ -332,11 +333,11 @@ export default function SubscriptionsPage({
               await api.subscriptions.resetToken(v.id);
             } catch {
               await refresh();
-              setActionError("UUID 已更换，链接更换失败，请重试");
+              setActionError(i18n.t('subscriptions.k024'));
               return;
             }
             await refresh();
-            toast.success("链接与 UUID 已全部重置，旧配置已失效");
+            toast.success(i18n.t('subscriptions.k025'));
           })();
         }}
       />

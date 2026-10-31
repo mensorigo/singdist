@@ -14,6 +14,7 @@ import {
   type ImportCandidate,
   type NodeView,
 } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 export function NodeImportDialog({
   node,
@@ -52,19 +53,19 @@ export function NodeImportDialog({
       const res = await api.nodes.importInbounds(node.id, [...selected]);
       if (res.created.length > 0) {
         toast.success(
-          `已导入 ${res.created.length} 个入站：${res.created.map((c) => c.name).join("、")}`,
+          i18n.t('nodes.k066', { count: res.created.length, names: res.created.map((c) => c.name).join("、") }),
         );
       }
       for (const s of res.skipped) {
-        toast.warning(`${s.name} 未导入：${s.reason}`);
+        toast.warning(i18n.t('nodes.k067', { name: s.name, reason: s.reason }));
       }
       if (res.created.length === 0 && res.skipped.length === 0) {
-        toast("没有导入任何入站");
+        toast(i18n.t('nodes.k068'));
       }
       await onImported();
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "导入失败，请重试",
+        err instanceof ApiError ? err.message : i18n.t('nodes.k069'),
       );
     } finally {
       setSubmitting(false);
@@ -80,10 +81,10 @@ export function NodeImportDialog({
     >
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>从 {node.name} 导入入站</DialogTitle>
+          <DialogTitle>{i18n.t('nodes.k089', { value: node.name })}</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          导入的入站不带用户，需加入订阅模板后才会有用户。导入后只跑在这个节点上。
+          {i18n.t('nodes.k090')}
         </p>
         <div className="space-y-2">
           {candidates.map((c) => (
@@ -116,13 +117,13 @@ export function NodeImportDialog({
             onClick={onClose}
             disabled={submitting}
           >
-            取消
+            {i18n.t('nodes.k091')}
           </Button>
           <Button
             onClick={handleConfirm}
             disabled={submitting || selected.size === 0}
           >
-            {submitting ? "导入中…" : "导入"}
+            {submitting ? i18n.t('nodes.k070') : i18n.t('nodes.k071')}
           </Button>
         </DialogFooter>
       </DialogContent>

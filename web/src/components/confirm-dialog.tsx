@@ -7,6 +7,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import i18n from "@/lib/i18n";
 
 // ConfirmDialog is the shared centred floating window for any step that
 // needs a deliberate second action (deletions, switches, resets). It
@@ -32,8 +33,8 @@ export function ConfirmDialog({
   onOpenChange,
   title,
   description,
-  confirmLabel = "确认",
-  cancelLabel = "取消",
+  confirmLabel = i18n.t('common.k001'),
+  cancelLabel = i18n.t('common.k002'),
   destructive = false,
   busy = false,
   onConfirm,
@@ -60,7 +61,7 @@ export function ConfirmDialog({
             disabled={busy}
             onClick={onConfirm}
           >
-            {busy ? "处理中…" : confirmLabel}
+            {busy ? i18n.t('common.k003') : confirmLabel}
           </Button>
         </DialogFooter>
       </DialogContent>

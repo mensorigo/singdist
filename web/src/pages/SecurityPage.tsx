@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 function SectionCard({
   icon,
@@ -68,7 +69,7 @@ function PasswordField({
           size="icon"
           onClick={() => setShow((s) => !s)}
           disabled={disabled}
-          aria-label={show ? "隐藏密码" : "显示密码"}
+          aria-label={show ? i18n.t('security.k001') : i18n.t('security.k002')}
           className="absolute right-1 top-1/2 h-7 w-7 -translate-y-1/2 rounded-lg [&_svg]:size-4"
         >
           {show ? <EyeOff /> : <Eye />}
@@ -80,8 +81,8 @@ function PasswordField({
 
 function authErrorText(err: unknown, fallback: string): string {
   if (err instanceof ApiError) {
-    if (err.code === "wrong_password") return "当前密码不正确";
-    if (err.code === "username_taken") return "用户名已被占用";
+    if (err.code === "wrong_password") return i18n.t('security.k003');
+    if (err.code === "username_taken") return i18n.t('security.k004');
     if (err.code === "invalid_request") return err.message || fallback;
     return err.message || fallback;
   }
@@ -110,24 +111,24 @@ export default function SecurityPage({
   const submitAccount = async () => {
     if (!currentPassword || !hasChange || saving) return;
     if (newUsername.trim() === "") {
-      setFormError("用户名不能为空");
+      setFormError(i18n.t('security.k005'));
       return;
     }
     if (/\s/.test(newUsername)) {
-      setFormError("用户名不能含空格");
+      setFormError(i18n.t('security.k006'));
       return;
     }
     if (passChanged) {
       if (nextPassword.length < 8 || nextPassword.length > 72) {
-        setFormError("新密码需要 8–72 个字符");
+        setFormError(i18n.t('security.k007'));
         return;
       }
       if (nextPassword === currentPassword) {
-        setFormError("新密码不能与当前密码相同");
+        setFormError(i18n.t('security.k008'));
         return;
       }
       if (nextPassword !== confirmPassword) {
-        setFormError("两次输入的新密码不一致");
+        setFormError(i18n.t('security.k009'));
         return;
       }
     }
@@ -140,11 +141,11 @@ export default function SecurityPage({
         ...(passChanged ? { newPassword: nextPassword } : {}),
       });
       if (nameChanged && passChanged) {
-        toast.success("用户名和密码已修改，其他设备的登录已失效");
+        toast.success(i18n.t('security.k010'));
       } else if (nameChanged) {
-        toast.success("用户名已修改");
+        toast.success(i18n.t('security.k011'));
       } else {
-        toast.success("密码已修改，其他设备的登录已失效");
+        toast.success(i18n.t('security.k012'));
       }
       onUsernameChanged(res.username);
       setNewUsername(res.username);
@@ -152,7 +153,7 @@ export default function SecurityPage({
       setNextPassword("");
       setConfirmPassword("");
     } catch (err) {
-      setFormError(authErrorText(err, "保存失败，请重试"));
+      setFormError(authErrorText(err, i18n.t('security.k013')));
     } finally {
       setSaving(false);
     }
@@ -162,8 +163,8 @@ export default function SecurityPage({
     <div className="space-y-3">
       <SectionCard
         icon={<User className="h-[18px] w-[18px]" />}
-        title="账号安全"
-        desc="用户名和密码可以在这里一起改；只填要改的那一项，不填则保持不变。提交时验证一次当前密码。"
+        title={i18n.t('security.k014')}
+        desc={i18n.t('security.k015')}
       >
         <form
           onSubmit={(e) => {
@@ -173,11 +174,11 @@ export default function SecurityPage({
           className="space-y-3"
         >
           <div>
-            <p className="mb-1.5 text-sm">用户名</p>
+            <p className="mb-1.5 text-sm">{i18n.t('security.k016')}</p>
             <Input
               value={newUsername}
               onChange={(e) => setNewUsername(e.target.value)}
-              placeholder="与当前相同则不改名"
+              placeholder={i18n.t('security.k017')}
               maxLength={64}
               disabled={saving}
               autoComplete="username"
@@ -185,24 +186,24 @@ export default function SecurityPage({
             />
           </div>
           <PasswordField
-            label="当前密码"
+            label={i18n.t('security.k018')}
             value={currentPassword}
             onChange={setCurrentPassword}
-            placeholder="验证身份"
+            placeholder={i18n.t('security.k019')}
             disabled={saving}
             autoComplete="current-password"
           />
           <PasswordField
-            label="新密码"
+            label={i18n.t('security.k020')}
             value={nextPassword}
             onChange={setNextPassword}
-            placeholder="不改请留空，8–72 个字符"
+            placeholder={i18n.t('security.k021')}
             disabled={saving}
             autoComplete="new-password"
           />
           {passChanged && (
             <PasswordField
-              label="确认新密码"
+              label={i18n.t('security.k022')}
               value={confirmPassword}
               onChange={setConfirmPassword}
               disabled={saving}
@@ -216,7 +217,7 @@ export default function SecurityPage({
             type="submit"
             disabled={saving || !currentPassword || !hasChange}
           >
-            保存修改
+            {i18n.t('security.k023')}
           </Button>
         </form>
       </SectionCard>

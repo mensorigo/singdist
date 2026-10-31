@@ -9,13 +9,13 @@ export const ICON_BTN_CLS =
 
 export const DIFF_FIELD_LABEL: Record<InboundDiff["field"], string> = {
   sni: "SNI",
-  publicKey: "公钥",
+  publicKey: "inbounds.diffField.publicKey",
   shortId: "Short ID",
-  upMbps: "上行 Mbps",
-  downMbps: "下行 Mbps",
+  upMbps: "inbounds.diffField.upMbps",
+  downMbps: "inbounds.diffField.downMbps",
   uuid: "UUID",
-  congestion: "拥塞控制",
-  method: "加密方法",
+  congestion: "inbounds.diffField.congestion",
+  method: "inbounds.diffField.method",
 };
 
 export const PROTOCOL_LABEL: Record<InboundProtocol, string> = {

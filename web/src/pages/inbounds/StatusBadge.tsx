@@ -1,5 +1,6 @@
 import type { InboundStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import i18n from "@/lib/i18n";
 
 export function StatusBadge({
   status,
@@ -9,26 +10,26 @@ export function StatusBadge({
   showWarnings: boolean;
 }) {
   const map = {
-    synced: ["已同步", "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"],
+    synced: [i18n.t('inbounds.k051'), "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"],
     // Warnings off: the drifted badge keeps its label but drops the
     // yellow, so no amber remains anywhere on the page.
     drifted: [
-      "有差异",
+      i18n.t('inbounds.k052'),
       showWarnings
         ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
         : "bg-muted text-muted-foreground",
     ],
-    pending: ["未同步", "bg-muted text-muted-foreground"],
-    unknown: ["无法对照", "bg-muted text-muted-foreground"],
-    disabled: ["已停用", "bg-muted text-muted-foreground"],
+    pending: [i18n.t('inbounds.k053'), "bg-muted text-muted-foreground"],
+    unknown: [i18n.t('inbounds.k054'), "bg-muted text-muted-foreground"],
+    disabled: [i18n.t('inbounds.k055'), "bg-muted text-muted-foreground"],
     not_listening: [
-      "未监听",
+      i18n.t('inbounds.k056'),
       showWarnings
         ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
         : "bg-muted text-muted-foreground",
     ],
-    paused: ["已暂停", "bg-amber-500/10 text-amber-600 dark:text-amber-400"],
-    offline: ["离线", "bg-muted text-muted-foreground"],
+    paused: [i18n.t('inbounds.k057'), "bg-amber-500/10 text-amber-600 dark:text-amber-400"],
+    offline: [i18n.t('inbounds.k058'), "bg-muted text-muted-foreground"],
   } as const;
   const [label, cls] = map[status];
   return (

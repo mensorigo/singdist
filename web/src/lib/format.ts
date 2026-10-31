@@ -1,3 +1,4 @@
+import i18n from "@/lib/i18n";
 const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
 
 export function formatBytes(bytes: number): string {
@@ -17,8 +18,8 @@ export function formatUptime(totalSecs: number): string {
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
   const sec = s % 60;
-  if (d > 0) return `${d} 天 ${h} 小时`;
-  if (h > 0) return `${h} 小时 ${m} 分`;
-  if (m > 0) return `${m} 分 ${sec} 秒`;
-  return `${sec} 秒`;
+  if (d > 0) return i18n.t('common.k010', { d: d, h: h });
+  if (h > 0) return i18n.t('common.k011', { h: h, m: m });
+  if (m > 0) return i18n.t('common.k012', { m: m, sec: sec });
+  return i18n.t('common.k013', { sec: sec });
 }

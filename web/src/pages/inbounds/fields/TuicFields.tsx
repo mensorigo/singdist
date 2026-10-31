@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/select";
 import { SecretInput } from "../SecretInput";
 import { randomHex } from "../helpers";
+import i18n from "@/lib/i18n";
 
 interface TuicFieldsProps {
   tuicUuid: string;
@@ -45,39 +46,39 @@ export function TuicFields({
                     onClick={() => setTuicUuid(crypto.randomUUID())}
                     className="h-7 rounded-lg px-2 text-xs"
                   >
-                    随机生成
+                    {i18n.t('inbounds.fields.k037')}
                   </Button>
                 </div>
                 <Input
                   id="inb-tuuid"
                   value={tuicUuid}
                   onChange={(e) => setTuicUuid(e.target.value)}
-                  placeholder="留空则创建时自动生成"
+                  placeholder={i18n.t('inbounds.fields.k023')}
                   className="font-mono text-xs"
                 />
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="inb-tpw">访问密码</Label>
+                  <Label htmlFor="inb-tpw">{i18n.t('inbounds.fields.k024')}</Label>
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => setTuicPassword(randomHex(8))}
                     className="h-7 rounded-lg px-2 text-xs"
                   >
-                    随机生成
+                    {i18n.t('inbounds.fields.k038')}
                   </Button>
                 </div>
                 <SecretInput
                   id="inb-tpw"
                   value={tuicPassword}
                   onChange={setTuicPassword}
-                  placeholder="留空则创建时自动生成"
+                  placeholder={i18n.t('inbounds.fields.k023')}
                 />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="inb-tcc">拥塞控制</Label>
+                  <Label htmlFor="inb-tcc">{i18n.t('inbounds.fields.k025')}</Label>
                   <Select
                     value={tuicCongestion}
                     onValueChange={setTuicCongestion}
@@ -86,7 +87,7 @@ export function TuicFields({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="bbr">BBR（推荐）</SelectItem>
+                      <SelectItem value="bbr">{i18n.t('inbounds.fields.k026')}</SelectItem>
                       <SelectItem value="cubic">Cubic</SelectItem>
                       <SelectItem value="new_reno">New Reno</SelectItem>
                       {/* Temporary option, same as obfs above. */}
@@ -99,17 +100,17 @@ export function TuicFields({
                   </Select>
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="inb-tsni">SNI（可选）</Label>
+                  <Label htmlFor="inb-tsni">{i18n.t('inbounds.fields.k027')}</Label>
                   <Input
                     id="inb-tsni"
                     value={tuicSni}
                     onChange={(e) => setTuicSni(e.target.value)}
-                    placeholder="证书对应的域名，可留空"
+                    placeholder={i18n.t('inbounds.fields.k028')}
                   />
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                服务器证书将使用「证书管理」中的当前证书（同步阶段生效）。
+                {i18n.t('inbounds.fields.k039')}
               </p>
             </>
   );

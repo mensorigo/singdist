@@ -1,12 +1,13 @@
 import type { SubscriptionView } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import i18n from "@/lib/i18n";
 
 export function StatusPills({ v }: { v: SubscriptionView }) {
   const life = {
-    active: ["启用中", "text-emerald-600 dark:text-emerald-400", "bg-emerald-500"],
-    disabled: ["已停用", "text-muted-foreground", "bg-muted-foreground"],
-    expired: ["已过期", "text-destructive", "bg-destructive"],
-    over_quota: ["已超额", "text-destructive", "bg-destructive"],
+    active: [i18n.t('subscriptions.k035'), "text-emerald-600 dark:text-emerald-400", "bg-emerald-500"],
+    disabled: [i18n.t('subscriptions.k036'), "text-muted-foreground", "bg-muted-foreground"],
+    expired: [i18n.t('subscriptions.k037'), "text-destructive", "bg-destructive"],
+    over_quota: [i18n.t('subscriptions.k038'), "text-destructive", "bg-destructive"],
   }[v.status] as [string, string, string];
   return (
     <div className="flex items-center gap-1.5">

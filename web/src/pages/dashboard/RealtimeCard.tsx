@@ -1,20 +1,21 @@
 import type { DashboardSummary } from "@/lib/api";
 import { formatRate } from "@/lib/format";
 import { TrafficChart } from "./TrafficChart";
+import i18n from "@/lib/i18n";
 
 export function RealtimeCard({ data }: { data: DashboardSummary }) {
   return (
     <div className="flex h-full flex-col rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-2">
-        <p className="text-base font-semibold">实时网速</p>
+        <p className="text-base font-semibold">{i18n.t('dashboard.k019')}</p>
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2 w-2 rounded-full bg-foreground" />
-            上行 {formatRate(data.upRate)}
+            {i18n.t('dashboard.k030', { value: formatRate(data.upRate) })}
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block h-2 w-2 rounded-full bg-muted-foreground" />
-            下行 {formatRate(data.downRate)}
+            {i18n.t('dashboard.k031', { value: formatRate(data.downRate) })}
           </span>
         </div>
       </div>

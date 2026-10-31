@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { api, ApiError } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 interface Props {
   onLogin: (username: string) => void;
@@ -41,14 +42,14 @@ export default function LoginPage({ onLogin }: Props) {
     } catch (err) {
       if (err instanceof ApiError) {
         if (err.code === "rate_limited") {
-          setError("登录失败次数过多，账号已临时锁定，请稍后再试。");
+          setError(i18n.t('login.k001'));
         } else if (err.code === "invalid_credentials") {
-          setError("用户名或密码不正确。");
+          setError(i18n.t('login.k002'));
         } else {
-          setError(`登录失败：${err.message}`);
+          setError(i18n.t('login.k003', { value: err.message }));
         }
       } else {
-        setError("无法连接服务器，请确认面板服务正在运行。");
+        setError(i18n.t('login.k004'));
       }
     } finally {
       setBusy(false);
@@ -65,12 +66,12 @@ export default function LoginPage({ onLogin }: Props) {
           <CardTitle className="text-[22px] font-semibold tracking-tight">
             singbox-ui
           </CardTitle>
-          <CardDescription>管理员登录</CardDescription>
+          <CardDescription>{i18n.t('login.k005')}</CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="username">用户名</Label>
+              <Label htmlFor="username">{i18n.t('login.k006')}</Label>
               <Input
                 id="username"
                 autoComplete="username"
@@ -80,7 +81,7 @@ export default function LoginPage({ onLogin }: Props) {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">密码</Label>
+              <Label htmlFor="password">{i18n.t('login.k007')}</Label>
               <Input
                 id="password"
                 type="password"
@@ -99,7 +100,7 @@ export default function LoginPage({ onLogin }: Props) {
               </div>
             )}
             <Button type="submit" className="w-full" disabled={busy}>
-              {busy ? "登录中…" : "登录"}
+              {busy ? i18n.t('login.k008') : i18n.t('login.k009')}
             </Button>
           </form>
         </CardContent>

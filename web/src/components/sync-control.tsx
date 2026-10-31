@@ -14,6 +14,7 @@ import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Button } from "@/components/ui/button";
 import { api, ApiError, onConfigChanged, type SyncStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import i18n from "@/lib/i18n";
 
 export default function SyncControl({
   refreshSignal,
@@ -82,14 +83,14 @@ export default function SyncControl({
       try {
         const row = await api.sync.run();
         if (row.result === "applied") {
-          toast.success("已同步到核心");
+          toast.success(i18n.t('sync.k001'));
         } else if (row.result === "no_change") {
-          toast.success("配置无变更");
+          toast.success(i18n.t('sync.k002'));
         } else {
-          toast.error(row.detail || "同步失败");
+          toast.error(row.detail || i18n.t('sync.k003'));
         }
       } catch (err) {
-        toast.error(err instanceof ApiError ? err.message : "同步失败，请重试");
+        toast.error(err instanceof ApiError ? err.message : i18n.t('sync.k004'));
       } finally {
         setBusy(false);
         await load();
@@ -103,10 +104,10 @@ export default function SyncControl({
       <span
         title={
           !status
-            ? "同步状态加载中"
+            ? i18n.t('sync.k005')
             : status.inSync
-              ? "核心配置已同步"
-              : "有变更待同步"
+              ? i18n.t('sync.k006')
+              : i18n.t('sync.k007')
         }
         className={cn(
           "h-2 w-2 shrink-0 rounded-full",
@@ -123,8 +124,8 @@ export default function SyncControl({
         onClick={() => setConfirmSync(true)}
         disabled={busy || !status || status.inSync}
         className="h-8 w-8 shrink-0 rounded-full [&_svg]:size-5"
-        title="同步到核心"
-        aria-label="同步到核心"
+        title={i18n.t('sync.k008')}
+        aria-label={i18n.t('sync.k008')}
       >
         {busy ? (
           <LoaderCircle strokeWidth={1.75} className="animate-spin" />
@@ -136,13 +137,13 @@ export default function SyncControl({
       <ConfirmDialog
         open={confirmSync}
         onOpenChange={setConfirmSync}
-        title="同步到核心"
+        title={i18n.t('sync.k008')}
         description={
           status?.restartEnabled
-            ? "将按面板的入站与订阅重新生成核心配置并重启核心：校验不过会自动放弃，重启后不健康会自动回滚。继续吗？"
-            : "将按面板的入站与订阅重新生成核心配置并写入目标文件（当前未配置核心重启，不会重启核心）。继续吗？"
+            ? i18n.t('sync.k009')
+            : i18n.t('sync.k010')
         }
-        confirmLabel="同步"
+        confirmLabel={i18n.t('sync.k011')}
         busy={busy}
         onConfirm={runSync}
       />

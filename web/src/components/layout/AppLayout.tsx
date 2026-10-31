@@ -18,6 +18,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Theme } from "@/lib/theme";
+import i18n from "@/lib/i18n";
 
 export type RouteKey =
   | "dashboard"
@@ -29,16 +30,16 @@ export type RouteKey =
   | "security"
   | "logs"
 
-export const ROUTES: { key: RouteKey; path: string; label: string }[] = [
-  { key: "dashboard", path: "/dashboard", label: "仪表盘" },
-  { key: "subscriptions", path: "/subscriptions", label: "订阅管理" },
-  { key: "inbounds", path: "/inbounds", label: "入站" },
-  { key: "nodes", path: "/nodes", label: "节点" },
-  { key: "certificates", path: "/certificates", label: "证书管理" },
-  { key: "security", path: "/security", label: "安全和隐私" },
-  { key: "logs", path: "/logs", label: "日志" },
+export const ROUTES: { key: RouteKey; path: string; labelKey: string }[] = [
+  { key: "dashboard", path: "/dashboard", labelKey: "nav.dashboard" },
+  { key: "subscriptions", path: "/subscriptions", labelKey: "nav.subscriptions" },
+  { key: "inbounds", path: "/inbounds", labelKey: "nav.inbounds" },
+  { key: "nodes", path: "/nodes", labelKey: "nav.nodes" },
+  { key: "certificates", path: "/certificates", labelKey: "nav.certificates" },
+  { key: "security", path: "/security", labelKey: "nav.security" },
+  { key: "logs", path: "/logs", labelKey: "nav.logs" },
   // 设置放在侧边栏最下面（退出登录上方）。
-  { key: "settings", path: "/settings", label: "设置" },
+  { key: "settings", path: "/settings", labelKey: "nav.settings" },
 ];
 
 const NAV_ICONS: Record<RouteKey, ReactNode> = {
@@ -141,8 +142,8 @@ export default function AppLayout({
       <div className="flex items-center py-4">
         <button
           onClick={() => setCollapsed((v) => !v)}
-          title={collapsed ? "展开侧边栏" : "折叠侧边栏"}
-          aria-label={collapsed ? "展开侧边栏" : "折叠侧边栏"}
+          title={collapsed ? i18n.t("nav.expandSidebar") : i18n.t("nav.collapseSidebar")}
+          aria-label={collapsed ? i18n.t("nav.expandSidebar") : i18n.t("nav.collapseSidebar")}
           className="flex w-[70px] shrink-0 items-center justify-center"
         >
           <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-muted text-foreground/80 transition-colors duration-300 hover:bg-accent hover:text-foreground">
@@ -158,8 +159,8 @@ export default function AppLayout({
             becomes unclickable when collapsed; the logo expands it back) */}
         <button
           onClick={() => setCollapsed(true)}
-          title="折叠侧边栏"
-          aria-label="折叠侧边栏"
+          title={i18n.t("nav.collapseSidebar")}
+          aria-label={i18n.t("nav.collapseSidebar")}
           tabIndex={collapsed ? -1 : 0}
           className={cn(
             "ml-auto mr-3 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-opacity ease-out hover:bg-accent hover:text-foreground",
@@ -181,8 +182,8 @@ export default function AppLayout({
           <button
             key={r.key}
             onClick={() => onNavigate(r.key)}
-            title={collapsed ? r.label : undefined}
-            aria-label={r.label}
+            title={collapsed ? i18n.t(r.labelKey) : undefined}
+            aria-label={i18n.t(r.labelKey)}
             className={cn(
               "group relative flex h-11 w-full items-center rounded-lg text-[15px] transition-colors",
               route === r.key
@@ -203,7 +204,7 @@ export default function AppLayout({
             <span className="relative z-10 flex w-[46px] shrink-0 items-center justify-center">
               {NAV_ICONS[r.key]}
             </span>
-            <span className={cn("relative z-10", labelCls)}>{r.label}</span>
+            <span className={cn("relative z-10", labelCls)}>{i18n.t(r.labelKey)}</span>
           </button>
         ))}
       </nav>
@@ -223,8 +224,8 @@ export default function AppLayout({
         <div className="px-3 py-3">
           <button
             onClick={onLogout}
-            title={collapsed ? `退出登录（${username}）` : "退出登录"}
-            aria-label="退出登录"
+            title={collapsed ? i18n.t("nav.logoutUser", { username }) : i18n.t("nav.logout")}
+            aria-label={i18n.t("nav.logout")}
             className="group relative flex h-11 w-full items-center rounded-lg text-[15px] text-muted-foreground transition-colors hover:text-foreground"
           >
             <span
@@ -235,7 +236,7 @@ export default function AppLayout({
             <span className="relative z-10 flex w-[46px] shrink-0 items-center justify-center">
               <LogOut className="h-[18px] w-[18px] shrink-0" />
             </span>
-            <span className={cn("relative z-10", labelCls)}>退出登录</span>
+            <span className={cn("relative z-10", labelCls)}>{i18n.t("nav.logout")}</span>
           </button>
         </div>
       </div>
@@ -264,7 +265,7 @@ export default function AppLayout({
         <header className="sticky top-0 z-10 border-b bg-card">
           <div className="flex h-14 items-center gap-2 px-4 md:px-6">
             <span className="text-lg font-semibold">
-              {current?.label ?? ""}
+              {current ? i18n.t(current.labelKey) : ""}
             </span>
 
             <div className="ml-auto flex items-center gap-1.5">
@@ -273,8 +274,8 @@ export default function AppLayout({
                 size="icon"
                 className="h-10 w-10 [&_svg]:size-5"
                 onClick={handleRefresh}
-                title="刷新"
-                aria-label="刷新"
+                title={i18n.t("nav.refresh")}
+                aria-label={i18n.t("nav.refresh")}
               >
                 <RefreshCw
                   strokeWidth={1.75}
@@ -287,8 +288,8 @@ export default function AppLayout({
                 size="icon"
                 className="h-10 w-10 [&_svg]:size-5"
                 onClick={onToggleTheme}
-                title={theme === "dark" ? "切换到浅色" : "切换到暗色"}
-                aria-label="切换主题"
+                title={theme === "dark" ? i18n.t("nav.switchToLight") : i18n.t("nav.switchToDark")}
+                aria-label={i18n.t("nav.switchTheme")}
               >
                 {theme === "dark" ? (
                   <Sun strokeWidth={1.75} />
@@ -302,8 +303,8 @@ export default function AppLayout({
                 size="icon"
                 className="h-10 w-10 [&_svg]:size-5 md:hidden"
                 onClick={onLogout}
-                title="退出登录"
-                aria-label="退出登录"
+                title={i18n.t("nav.logout")}
+                aria-label={i18n.t("nav.logout")}
               >
                 <LogOut strokeWidth={1.75} />
               </Button>
@@ -323,7 +324,7 @@ export default function AppLayout({
                     : "text-muted-foreground",
                 )}
               >
-                {r.label}
+                {i18n.t(r.labelKey)}
               </button>
             ))}
           </nav>

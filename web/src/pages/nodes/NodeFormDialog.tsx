@@ -17,6 +17,7 @@ import {
   type NodeView,
 } from "@/lib/api";
 import { normalizeServerIP } from "./format";
+import i18n from "@/lib/i18n";
 
 export function NodeFormDialog({
   item,
@@ -75,7 +76,7 @@ export function NodeFormDialog({
   const handleRequestPairingCode = async () => {
     const addr = normalizeServerIP(address);
     if (addr === "") {
-      setFormError("请先填服务器IP");
+      setFormError(i18n.t('nodes.k043'));
       return;
     }
     setFormError(null);
@@ -85,7 +86,7 @@ export function NodeFormDialog({
       setPairingLock(res.retry_after > 0 ? res.retry_after : 60);
     } catch (err) {
       setFormError(
-        err instanceof ApiError ? err.message : "请求生成配对码失败",
+        err instanceof ApiError ? err.message : i18n.t('nodes.k044'),
       );
     }
   };
@@ -103,7 +104,7 @@ export function NodeFormDialog({
       // at all, and the backend keeps the existing token.
       const code = pairingCode.trim();
       if (creating && code === "") {
-        setFormError("请先填配对码");
+        setFormError(i18n.t('nodes.k045'));
         setSubmitting(false);
         return;
       }
@@ -114,7 +115,7 @@ export function NodeFormDialog({
           pairing_code: code,
           publicHost: publicHost.trim() || undefined,
         });
-        toast.success("节点已添加（5 秒内开始首次推送和状态探测）");
+        toast.success(i18n.t('nodes.k046'));
         if (created.warning) {
           toast.warning(created.warning);
         }
@@ -125,7 +126,7 @@ export function NodeFormDialog({
           pairing_code: code || undefined,
           publicHost: publicHost.trim(),
         });
-        toast.success("节点已保存");
+        toast.success(i18n.t('nodes.k047'));
       }
       await onSaved();
       // Creation-time probe succeeded (no warning): auto-scan the
@@ -140,7 +141,7 @@ export function NodeFormDialog({
           ? err.message
           : err instanceof Error
             ? err.message
-            : "保存失败，请重试",
+            : i18n.t('nodes.k048'),
       );
     } finally {
       setSubmitting(false);
@@ -156,29 +157,29 @@ export function NodeFormDialog({
     >
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{creating ? "添加节点" : "编辑节点"}</DialogTitle>
+          <DialogTitle>{creating ? i18n.t('nodes.k049') : i18n.t('nodes.k050')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="node-name">备注（选填）</Label>
+            <Label htmlFor="node-name">{i18n.t('nodes.k051')}</Label>
             <Input
               id="node-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="留空则自动使用主机名"
+              placeholder={i18n.t('nodes.k052')}
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="node-address">服务器IP</Label>
+            <Label htmlFor="node-address">{i18n.t('nodes.k053')}</Label>
             <Input
               id="node-address"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="IP地址"
+              placeholder={i18n.t('nodes.k054')}
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="node-pairing">配对码</Label>
+            <Label htmlFor="node-pairing">{i18n.t('nodes.k055')}</Label>
             <div className="flex gap-2">
               <Input
                 id="node-pairing"
@@ -190,8 +191,8 @@ export function NodeFormDialog({
                 }
                 placeholder={
                   creating
-                    ? "8 位配对码，子服务器终端查看"
-                    : "留空保持不变，填了则重新配对"
+                    ? i18n.t('nodes.k056')
+                    : i18n.t('nodes.k057')
                 }
                 maxLength={8}
                 className="flex-1"
@@ -202,29 +203,29 @@ export function NodeFormDialog({
                 onClick={handleRequestPairingCode}
                 disabled={pairingLock > 0 || submitting}
               >
-                {pairingLock > 0 ? `发送请求（${pairingLock}s）` : "发送请求"}
+                {pairingLock > 0 ? i18n.t('nodes.k058', { pairingLock: pairingLock }) : i18n.t('nodes.k059')}
               </Button>
             </div>
             {pairingRequested && (
               <p className="text-sm text-muted-foreground">
-                已请求生成，请去子服务器终端查看配对码，5分钟内有效。
+                {i18n.t('nodes.k085')}
               </p>
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="node-public">对外地址（可选）</Label>
+            <Label htmlFor="node-public">{i18n.t('nodes.k060')}</Label>
             <Input
               id="node-public"
               value={publicHost}
               onChange={(e) => setPublicHost(e.target.value)}
-              placeholder="节点对外地址显示，默认使用IP地址，可以使用域名"
+              placeholder={i18n.t('nodes.k061')}
             />
           </div>
           {!creating && assignedNames !== null && (
             <p className="text-sm text-muted-foreground">
-              已分配入站：
-              {assignedNames.length > 0 ? assignedNames.join("、") : "无（仅本地）"}
-              。分配在入站编辑里改。
+              {i18n.t('nodes.k086')}
+              {assignedNames.length > 0 ? assignedNames.join("、") : i18n.t('nodes.k062')}
+              {i18n.t('nodes.k087')}
             </p>
           )}
           {formError && (
@@ -237,10 +238,10 @@ export function NodeFormDialog({
               onClick={onClose}
               disabled={submitting}
             >
-              取消
+              {i18n.t('nodes.k088')}
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? "保存中…" : creating ? "添加" : "保存"}
+              {submitting ? i18n.t('nodes.k063') : creating ? i18n.t('nodes.k064') : i18n.t('nodes.k065')}
             </Button>
           </DialogFooter>
         </form>

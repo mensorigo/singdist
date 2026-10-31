@@ -18,6 +18,7 @@ import { UploadCard } from "./certificates/UploadCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api, ApiError, type CertInfo, type CertList } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 export default function CertificatesPage({
   refreshSignal,
@@ -65,14 +66,14 @@ export default function CertificatesPage({
       await refresh();
       if (successMessage) toast.success(successMessage);
     } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "操作失败，请重试");
+      setActionError(err instanceof ApiError ? err.message : i18n.t('certificates.k001'));
     } finally {
       setBusyId(null);
     }
   }
 
   const handleActivate = (v: CertInfo) =>
-    runAction(v.id, () => api.certs.activate(v.id), "证书已启用");
+    runAction(v.id, () => api.certs.activate(v.id), i18n.t('certificates.k002'));
 
   const startEditNote = (v: CertInfo) => {
     setEditingNoteId(v.id);
@@ -85,7 +86,7 @@ export default function CertificatesPage({
       void runAction(
         v.id,
         () => api.certs.rename(v.id, noteDraft.trim()),
-        "备注已更新",
+        i18n.t('certificates.k003'),
       );
     }
   };
@@ -98,13 +99,13 @@ export default function CertificatesPage({
     if (!pendingDelete) return;
     const v = pendingDelete;
     setPendingDelete(null);
-    void runAction(v.id, () => api.certs.remove(v.id), "证书已删除");
+    void runAction(v.id, () => api.certs.remove(v.id), i18n.t('certificates.k004'));
   };
 
   if (!list) {
     return (
       <p className="text-sm text-muted-foreground">
-        {loadError ? "暂时无法获取证书数据，请稍后刷新重试" : "数据加载中…"}
+        {loadError ? i18n.t('certificates.k005') : i18n.t('certificates.k006')}
       </p>
     );
   }
@@ -119,7 +120,7 @@ export default function CertificatesPage({
           className="flex items-start gap-3 rounded-md border border-destructive/50 bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive"
         >
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          <p className="font-medium">当前证书已过期，请立即更换。</p>
+          <p className="font-medium">{i18n.t('certificates.k007')}</p>
         </div>
       )}
       {showWarnings && active && !active.expired && active.daysLeft < 30 && (
@@ -129,18 +130,18 @@ export default function CertificatesPage({
         >
           <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
           <p className="font-medium">
-            证书将在 {active.daysLeft} 天后过期，请及时更新。
+            {i18n.t('certificates.k054', { value: active.daysLeft })}
           </p>
         </div>
       )}
 
       {/* Current certificate */}
       <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
-        <p className="text-base font-semibold">当前证书</p>
+        <p className="text-base font-semibold">{i18n.t('certificates.k008')}</p>
         {active ? (
           <div className="mt-4 space-y-5">
             <div>
-              <p className="text-xs text-muted-foreground">主域名</p>
+              <p className="text-xs text-muted-foreground">{i18n.t('certificates.k009')}</p>
               <p className="mt-1 break-all text-2xl font-semibold tracking-tight">
                 {active.commonName || "—"}
               </p>
@@ -159,35 +160,35 @@ export default function CertificatesPage({
             </div>
 
             <div className="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-              <Field label="颁发者">{active.issuer || "—"}</Field>
-              <Field label="序列号">
+              <Field label={i18n.t('certificates.k010')}>{active.issuer || "—"}</Field>
+              <Field label={i18n.t('certificates.k011')}>
                 <span className="break-all font-mono text-xs">
                   {active.serial}
                 </span>
               </Field>
-              <Field label="密钥类型">{active.keyType}</Field>
-              <Field label="生效时间">
+              <Field label={i18n.t('certificates.k012')}>{active.keyType}</Field>
+              <Field label={i18n.t('certificates.k013')}>
                 <span className="tabular-nums">
                   {formatDateTime(active.notBefore)}
                 </span>
               </Field>
-              <Field label="到期时间">
+              <Field label={i18n.t('certificates.k014')}>
                 <span className="tabular-nums">
                   {formatDateTime(active.notAfter)}
                 </span>
               </Field>
-              <Field label="剩余天数">
+              <Field label={i18n.t('certificates.k015')}>
                 <DaysBadge
                   daysLeft={active.daysLeft}
                   expired={active.expired}
                   showWarnings={showWarnings}
                 />
               </Field>
-              <Field label="密钥匹配">
-                {active.keyMatches ? "是" : "否"}
+              <Field label={i18n.t('certificates.k016')}>
+                {active.keyMatches ? i18n.t('certificates.k017') : i18n.t('certificates.k018')}
               </Field>
-              <Field label="自签名">{active.selfSigned ? "是" : "否"}</Field>
-              <Field label="导入时间">
+              <Field label={i18n.t('certificates.k019')}>{active.selfSigned ? i18n.t('certificates.k017') : i18n.t('certificates.k018')}</Field>
+              <Field label={i18n.t('certificates.k020')}>
                 <span className="tabular-nums">
                   {formatDateTime(active.importedAt)}
                 </span>
@@ -195,13 +196,13 @@ export default function CertificatesPage({
             </div>
           </div>
         ) : (
-          <p className="mt-3 text-sm text-muted-foreground">暂无生效中的证书</p>
+          <p className="mt-3 text-sm text-muted-foreground">{i18n.t('certificates.k021')}</p>
         )}
       </section>
 
       {/* Versions */}
       <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
-        <p className="text-base font-semibold">证书版本</p>
+        <p className="text-base font-semibold">{i18n.t('certificates.k022')}</p>
         {actionError && (
           <p className="mt-2 text-[13px] text-destructive">{actionError}</p>
         )}
@@ -209,14 +210,14 @@ export default function CertificatesPage({
           <table className="w-full min-w-[760px] text-sm">
             <thead>
               <tr className="border-b text-left text-xs text-muted-foreground">
-                <th className="py-2 pr-3 font-medium">备注</th>
-                <th className="py-2 pr-3 font-medium">主域名</th>
-                <th className="py-2 pr-3 font-medium">颁发者</th>
-                <th className="py-2 pr-3 font-medium">到期</th>
-                <th className="py-2 pr-3 font-medium">剩余</th>
-                <th className="py-2 pr-3 font-medium">导入时间</th>
-                <th className="py-2 pr-3 font-medium">状态</th>
-                <th className="py-2 font-medium">操作</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('certificates.k023')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('certificates.k009')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('certificates.k010')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('certificates.k024')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('certificates.k025')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('certificates.k020')}</th>
+                <th className="py-2 pr-3 font-medium">{i18n.t('certificates.k026')}</th>
+                <th className="py-2 font-medium">{i18n.t('certificates.k027')}</th>
               </tr>
             </thead>
             <tbody>
@@ -233,7 +234,7 @@ export default function CertificatesPage({
                             if (e.key === "Enter") saveNote(v);
                             if (e.key === "Escape") setEditingNoteId(null);
                           }}
-                          placeholder="备注名"
+                          placeholder={i18n.t('certificates.k028')}
                           className="h-8 w-44"
                         />
                         <Button
@@ -241,19 +242,19 @@ export default function CertificatesPage({
                           disabled={busyId === v.id}
                           onClick={() => saveNote(v)}
                         >
-                          保存
+                          {i18n.t('certificates.k055')}
                         </Button>
                         <Button
                           size="sm"
                           variant="ghost"
                           onClick={() => setEditingNoteId(null)}
                         >
-                          取消
+                          {i18n.t('certificates.k056')}
                         </Button>
                       </div>
                     ) : (
                       <div
-                        title="双击编辑备注"
+                        title={i18n.t('certificates.k029')}
                         onDoubleClick={() => startEditNote(v)}
                         className="cursor-default select-none"
                       >
@@ -279,11 +280,11 @@ export default function CertificatesPage({
                   <td className="py-2.5 pr-3">
                     {v.active ? (
                       <span className="inline-flex rounded-full bg-primary px-2 py-0.5 text-xs font-medium text-primary-foreground">
-                        生效中
+                        {i18n.t('certificates.k057')}
                       </span>
                     ) : (
                       <span className="inline-flex rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
-                        备用
+                        {i18n.t('certificates.k058')}
                       </span>
                     )}
                   </td>
@@ -292,8 +293,8 @@ export default function CertificatesPage({
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
-                          title="启用"
-                          aria-label="启用"
+                          title={i18n.t('certificates.k030')}
+                          aria-label={i18n.t('certificates.k030')}
                           disabled={busyId === v.id}
                           onClick={() => void handleActivate(v)}
                           className={`${ICON_BTN_CLS} disabled:opacity-50`}
@@ -302,8 +303,8 @@ export default function CertificatesPage({
                         </button>
                         <button
                           type="button"
-                          title="删除"
-                          aria-label="删除"
+                          title={i18n.t('certificates.k031')}
+                          aria-label={i18n.t('certificates.k031')}
                           disabled={busyId === v.id}
                           onClick={() => handleDelete(v)}
                           className={`${ICON_BTN_CLS} disabled:opacity-50`}
@@ -321,7 +322,7 @@ export default function CertificatesPage({
                     colSpan={8}
                     className="py-6 text-center text-sm text-muted-foreground"
                   >
-                    暂无证书版本
+                    {i18n.t('certificates.k059')}
                   </td>
                 </tr>
               )}
@@ -339,13 +340,13 @@ export default function CertificatesPage({
         onOpenChange={(open) => {
           if (!open) setPendingDelete(null);
         }}
-        title="删除证书"
+        title={i18n.t('certificates.k032')}
         description={
           pendingDelete
-            ? `确定要删除证书「${pendingDelete.note || pendingDelete.commonName || pendingDelete.id}」吗？此操作不可恢复。`
+            ? i18n.t('certificates.k033', { value: pendingDelete.note || pendingDelete.commonName || pendingDelete.id })
             : undefined
         }
-        confirmLabel="删除"
+        confirmLabel={i18n.t('certificates.k031')}
         destructive
         onConfirm={confirmDelete}
       />

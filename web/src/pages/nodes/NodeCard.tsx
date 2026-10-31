@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { NodeView } from "@/lib/api";
 import { ICON_BTN_CLS, fmtBytes, fmtMem, fmtTime } from "./format";
+import i18n from "@/lib/i18n";
 
 export function NodeCard({
   n,
@@ -50,7 +51,7 @@ export function NodeCard({
                 <span className="flex shrink-0 items-center gap-1">
                   {n.syncStatus === "synced" && (
                     <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs text-emerald-700 dark:text-emerald-300">
-                      已同步
+                      {i18n.t('nodes.k075')}
                     </span>
                   )}
                   <span
@@ -62,24 +63,24 @@ export function NodeCard({
                           : "rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
                     }
                   >
-                    {n.paused ? "已暂停" : n.online ? "在线" : "离线"}
+                    {n.paused ? i18n.t('nodes.k026') : n.online ? i18n.t('nodes.k027') : i18n.t('nodes.k028')}
                   </span>
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
                 {n.lastVersion ? `agent ${n.lastVersion} · ` : ""}
-                {n.lastInboundCount} 个入站
+                {i18n.t('nodes.k076', { value: n.lastInboundCount })}
               </p>
             </CardHeader>
             <CardContent className="flex-1 space-y-3 text-sm">
               <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
-                <dt className="text-muted-foreground">服务器IP</dt>
+                <dt className="text-muted-foreground">{i18n.t('nodes.k029')}</dt>
                 <dd className="min-w-0 truncate text-foreground">
                   {n.address}
                 </dd>
                 {n.publicHost && (
                   <>
-                    <dt className="text-muted-foreground">对外地址</dt>
+                    <dt className="text-muted-foreground">{i18n.t('nodes.k030')}</dt>
                     <dd className="min-w-0 truncate text-foreground">
                       {n.publicHost}
                     </dd>
@@ -88,21 +89,21 @@ export function NodeCard({
               </dl>
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-xl bg-muted/50 px-3 py-2.5 shadow-sm">
-                  <p className="text-xs text-muted-foreground">CPU 使用率</p>
+                  <p className="text-xs text-muted-foreground">{i18n.t('nodes.k031')}</p>
                   <p className="mt-0.5 text-lg font-semibold leading-none">
                     {n.agentSystem?.available
                       ? `${n.agentSystem.cpuPct.toFixed(2)}%`
                       : "—"}
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    1 分钟负载{" "}
+                    {i18n.t('nodes.k077')}
                     {n.agentSystem?.available
                       ? n.agentSystem.load1.toFixed(2)
                       : "—"}
                   </p>
                 </div>
                 <div className="rounded-xl bg-muted/50 px-3 py-2.5 shadow-sm">
-                  <p className="text-xs text-muted-foreground">内存占用</p>
+                  <p className="text-xs text-muted-foreground">{i18n.t('nodes.k032')}</p>
                   <p className="mt-0.5 text-lg font-semibold leading-none">
                     {n.agentSystem?.available
                       ? `${n.agentSystem.memPct.toFixed(0)}%`
@@ -111,11 +112,11 @@ export function NodeCard({
                   <p className="mt-1 text-xs text-muted-foreground">
                     {n.agentSystem?.available
                       ? `${fmtMem(n.agentSystem.memUsed)} / ${fmtMem(n.agentSystem.memTotal)}`
-                      : "暂无数据"}
+                      : i18n.t('nodes.k033')}
                   </p>
                 </div>
                 <div className="rounded-xl bg-muted/50 px-3 py-2.5 shadow-sm">
-                  <p className="text-xs text-muted-foreground">硬盘占用</p>
+                  <p className="text-xs text-muted-foreground">{i18n.t('nodes.k034')}</p>
                   <p className="mt-0.5 text-lg font-semibold leading-none">
                     {n.agentSystem?.available && n.agentSystem.diskTotal > 0
                       ? `${n.agentSystem.diskPct.toFixed(2)}%`
@@ -124,11 +125,11 @@ export function NodeCard({
                   <p className="mt-1 text-xs text-muted-foreground">
                     {n.agentSystem?.available && n.agentSystem.diskTotal > 0
                       ? `${fmtMem(n.agentSystem.diskUsed)} / ${fmtMem(n.agentSystem.diskTotal)}`
-                      : "暂无数据"}
+                      : i18n.t('nodes.k033')}
                   </p>
                 </div>
                 <div className="rounded-xl bg-muted/50 px-3 py-2.5 shadow-sm">
-                  <p className="text-xs text-muted-foreground">总流量</p>
+                  <p className="text-xs text-muted-foreground">{i18n.t('nodes.k035')}</p>
                   <p className="mt-0.5 text-lg font-semibold leading-none">
                     {n.agentTraffic
                       ? fmtBytes(n.agentTraffic.up + n.agentTraffic.down)
@@ -136,20 +137,20 @@ export function NodeCard({
                   </p>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {n.agentTraffic
-                      ? `上行 ${fmtBytes(n.agentTraffic.up)} · 下行 ${fmtBytes(n.agentTraffic.down)}`
-                      : "暂无数据"}
+                      ? i18n.t('nodes.k036', { up: fmtBytes(n.agentTraffic.up), down: fmtBytes(n.agentTraffic.down) })
+                      : i18n.t('nodes.k033')}
                   </p>
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                上次推送{" "}
+                {i18n.t('nodes.k078')}
                 {n.lastPushResult
                   ? `${n.lastPushResult}（${fmtTime(n.lastPushAt)}）`
                   : "—"}
               </p>
               {n.agentStatusAt === 0 && (
                 <p className="text-[13px] text-muted-foreground">
-                  暂无节点状态快照，等探查或点刷新状态
+                  {i18n.t('nodes.k079')}
                 </p>
               )}
               {(n.syncStatus === "pending" ||
@@ -164,15 +165,15 @@ export function NodeCard({
               )}
               {n.paused && n.pausePending && (
                 <p className="text-[13px] text-amber-700 dark:text-amber-300">
-                  暂停还没落到节点，节点入站还在跑
+                  {i18n.t('nodes.k080')}
                 </p>
               )}
             </CardContent>
             <CardFooter className="mt-auto flex flex-wrap justify-end gap-1">
               <button
                 type="button"
-                title="拉取"
-                aria-label="拉取"
+                title={i18n.t('nodes.k037')}
+                aria-label={i18n.t('nodes.k037')}
                 onClick={() => onImportScan(n)}
                 disabled={acting !== null || n.paused}
                 className={`${ICON_BTN_CLS} disabled:opacity-50`}
@@ -181,8 +182,8 @@ export function NodeCard({
               </button>
               <button
                 type="button"
-                title={n.paused ? "推送（推空，停掉节点入站）" : "推送"}
-                aria-label="推送"
+                title={n.paused ? i18n.t('nodes.k038') : i18n.t('nodes.k039')}
+                aria-label={i18n.t('nodes.k039')}
                 onClick={() => onPush(n)}
                 disabled={acting !== null}
                 className={`${ICON_BTN_CLS} disabled:opacity-50`}
@@ -191,8 +192,8 @@ export function NodeCard({
               </button>
               <button
                 type="button"
-                title={n.paused ? "启用" : "暂停"}
-                aria-label={n.paused ? "启用" : "暂停"}
+                title={n.paused ? i18n.t('nodes.k040') : i18n.t('nodes.k041')}
+                aria-label={n.paused ? i18n.t('nodes.k040') : i18n.t('nodes.k041')}
                 onClick={() => onTogglePause(n)}
                 disabled={acting !== null}
                 className={`${ICON_BTN_CLS} disabled:opacity-50`}
@@ -207,8 +208,8 @@ export function NodeCard({
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    title="更多"
-                    aria-label="更多"
+                    title={i18n.t('nodes.k042')}
+                    aria-label={i18n.t('nodes.k042')}
                     disabled={acting !== null}
                     className={`${ICON_BTN_CLS} disabled:opacity-50`}
                   >
@@ -221,21 +222,21 @@ export function NodeCard({
                     onClick={() => onEdit(n)}
                   >
                     <Pencil className="mr-1.5 h-4 w-4" />
-                    编辑
+                    {i18n.t('nodes.k081')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-[13px]"
                     onClick={() => onProbe(n)}
                   >
                     <RefreshCw className="mr-1.5 h-4 w-4" />
-                    刷新状态
+                    {i18n.t('nodes.k082')}
                   </DropdownMenuItem>
                   <DropdownMenuItem
                     className="text-[13px]"
                     onClick={() => onClearBlock(n)}
                   >
                     <Unlock className="mr-1.5 h-4 w-4" />
-                    清除阻塞并重推
+                    {i18n.t('nodes.k083')}
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem
@@ -243,7 +244,7 @@ export function NodeCard({
                     onClick={() => onDelete(n)}
                   >
                     <Trash2 className="mr-1.5 h-4 w-4" />
-                    删除
+                    {i18n.t('nodes.k084')}
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>

@@ -20,33 +20,36 @@ import {
 import { Segmented } from "./settings/Segmented";
 import { SettingCard } from "./settings/SettingCard";
 import { Row } from "./settings/Row";
+import i18n, { setLanguage, type SupportedLanguage } from "@/lib/i18n";
 
 // Curated IANA zones for the panel timezone dropdown. The stored value
 // is always offered as well, so a zone set elsewhere never renders blank.
-const TIMEZONE_OPTIONS: { value: string; label: string }[] = [
-  { value: "Asia/Shanghai", label: "上海 (Asia/Shanghai)" },
-  { value: "Asia/Taipei", label: "台北 (Asia/Taipei)" },
-  { value: "Asia/Hong_Kong", label: "香港 (Asia/Hong_Kong)" },
-  { value: "Asia/Tokyo", label: "东京 (Asia/Tokyo)" },
-  { value: "Asia/Seoul", label: "首尔 (Asia/Seoul)" },
-  { value: "Asia/Singapore", label: "新加坡 (Asia/Singapore)" },
-  { value: "Asia/Bangkok", label: "曼谷 (Asia/Bangkok)" },
-  { value: "Asia/Dubai", label: "迪拜 (Asia/Dubai)" },
-  { value: "Asia/Kolkata", label: "加尔各答 (Asia/Kolkata)" },
-  { value: "Europe/London", label: "伦敦 (Europe/London)" },
-  { value: "Europe/Paris", label: "巴黎 (Europe/Paris)" },
-  { value: "Europe/Berlin", label: "柏林 (Europe/Berlin)" },
-  { value: "Europe/Moscow", label: "莫斯科 (Europe/Moscow)" },
-  { value: "Africa/Cairo", label: "开罗 (Africa/Cairo)" },
-  { value: "America/New_York", label: "纽约 (America/New_York)" },
-  { value: "America/Chicago", label: "芝加哥 (America/Chicago)" },
-  { value: "America/Denver", label: "丹佛 (America/Denver)" },
-  { value: "America/Los_Angeles", label: "洛杉矶 (America/Los_Angeles)" },
-  { value: "America/Sao_Paulo", label: "圣保罗 (America/Sao_Paulo)" },
-  { value: "Australia/Sydney", label: "悉尼 (Australia/Sydney)" },
-  { value: "Pacific/Auckland", label: "奥克兰 (Pacific/Auckland)" },
-  { value: "UTC", label: "协调世界时 (UTC)" },
+function timezoneOptions(): { value: string; label: string }[] {
+  return [
+  { value: "Asia/Shanghai", label: i18n.t('settings.k001') },
+  { value: "Asia/Taipei", label: i18n.t('settings.k002') },
+  { value: "Asia/Hong_Kong", label: i18n.t('settings.k003') },
+  { value: "Asia/Tokyo", label: i18n.t('settings.k004') },
+  { value: "Asia/Seoul", label: i18n.t('settings.k005') },
+  { value: "Asia/Singapore", label: i18n.t('settings.k006') },
+  { value: "Asia/Bangkok", label: i18n.t('settings.k007') },
+  { value: "Asia/Dubai", label: i18n.t('settings.k008') },
+  { value: "Asia/Kolkata", label: i18n.t('settings.k009') },
+  { value: "Europe/London", label: i18n.t('settings.k010') },
+  { value: "Europe/Paris", label: i18n.t('settings.k011') },
+  { value: "Europe/Berlin", label: i18n.t('settings.k012') },
+  { value: "Europe/Moscow", label: i18n.t('settings.k013') },
+  { value: "Africa/Cairo", label: i18n.t('settings.k014') },
+  { value: "America/New_York", label: i18n.t('settings.k015') },
+  { value: "America/Chicago", label: i18n.t('settings.k016') },
+  { value: "America/Denver", label: i18n.t('settings.k017') },
+  { value: "America/Los_Angeles", label: i18n.t('settings.k018') },
+  { value: "America/Sao_Paulo", label: i18n.t('settings.k019') },
+  { value: "Australia/Sydney", label: i18n.t('settings.k020') },
+  { value: "Pacific/Auckland", label: i18n.t('settings.k021') },
+  { value: "UTC", label: i18n.t('settings.k022') },
 ];
+}
 
 export default function SettingsPage({
   refreshSignal,
@@ -99,11 +102,11 @@ export default function SettingsPage({
       try {
         const v = await api.settings.update(patch);
         setSettings(v);
-        toast.success("设置已保存");
+        toast.success(i18n.t('settings.k023'));
       } catch (err) {
         setSettings(prev);
         toast.error(
-          err instanceof ApiError ? err.message : "保存失败，请重试",
+          err instanceof ApiError ? err.message : i18n.t('settings.k024'),
         );
       } finally {
         setSaving(false);
@@ -114,7 +117,7 @@ export default function SettingsPage({
   if (!settings) {
     return (
       <p className="text-sm text-muted-foreground">
-        {loadError ? "暂时无法获取设置，请稍后刷新重试" : "数据加载中…"}
+        {loadError ? i18n.t('settings.k025') : i18n.t('settings.k026')}
       </p>
     );
   }
@@ -122,7 +125,7 @@ export default function SettingsPage({
   const commitInterval = () => {
     const n = Number(intervalDraft);
     if (!Number.isInteger(n) || n < 0 || n > 720) {
-      toast.error("自动更新间隔需为 0–720 的整数（小时）");
+      toast.error(i18n.t('settings.k027'));
       setIntervalDraft(String(settings.updateIntervalHours));
       return;
     }
@@ -134,7 +137,7 @@ export default function SettingsPage({
   const commitDashInterval = () => {
     const n = Number(dashDraft);
     if (!Number.isInteger(n) || n < 1 || n > 60) {
-      toast.error("数据刷新频率需为 1–60 的整数（秒）");
+      toast.error(i18n.t('settings.k028'));
       setDashDraft(String(settings.dashIntervalSecs));
       return;
     }
@@ -149,16 +152,16 @@ export default function SettingsPage({
         <SettingCard
           icon={<Shield className="h-[18px] w-[18px]" />}
           title="WebRTC / STUN"
-          desc="STUN 打洞流量的走向。"
+          desc={i18n.t('settings.k029')}
         >
           <Segmented
             value={settings.webrtcMode}
             disabled={saving}
             onChange={(v) => apply({ webrtcMode: v })}
             options={[
-              { value: "proxy", label: "走代理" },
-              { value: "reject", label: "拒绝" },
-              { value: "off", label: "关闭" },
+              { value: "proxy", label: i18n.t('settings.k030') },
+              { value: "reject", label: i18n.t('settings.k031') },
+              { value: "off", label: i18n.t('settings.k032') },
             ]}
           />
         </SettingCard>
@@ -166,18 +169,18 @@ export default function SettingsPage({
         <SettingCard
           icon={<Globe className="h-[18px] w-[18px]" />}
           title="DNS"
-          desc="订阅 DNS 的兜底解析。"
+          desc={i18n.t('settings.k033')}
         >
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <span className="text-sm">兜底解析</span>
+              <span className="text-sm">{i18n.t('settings.k034')}</span>
               <Segmented
                 value={settings.dnsFallback}
                 disabled={saving}
                 onChange={(v) => apply({ dnsFallback: v })}
                 options={[
-                  { value: "foreign", label: "国外（Cloudflare / Google）" },
-                  { value: "domestic", label: "国内（阿里 / 腾讯）" },
+                  { value: "foreign", label: i18n.t('settings.k035') },
+                  { value: "domestic", label: i18n.t('settings.k036') },
                 ]}
               />
             </div>
@@ -198,11 +201,11 @@ export default function SettingsPage({
       <div className="grid gap-4 md:grid-cols-2">
       <SettingCard
         icon={<Share2 className="h-[18px] w-[18px]" />}
-        title="订阅分发"
-        desc="生成订阅内容时使用的全局选项。"
+        title={i18n.t('settings.k037')}
+        desc={i18n.t('settings.k038')}
       >
         <div className="divide-y">
-          <Row label="默认格式">
+          <Row label={i18n.t('settings.k039')}>
             <Segmented
               value={settings.linkFormat}
               disabled={saving}
@@ -213,7 +216,7 @@ export default function SettingsPage({
               ]}
             />
           </Row>
-          <Row label="本机对外地址" hint="只对本机节点生效：本机节点在订阅里的服务器地址，节点用自己的对外地址">
+          <Row label={i18n.t('settings.k040')} hint={i18n.t('settings.k041')}>
             <Input
               value={publicHostDraft}
               disabled={saving}
@@ -222,11 +225,11 @@ export default function SettingsPage({
                 const v = publicHostDraft.trim();
                 if (v !== settings.publicHost) apply({ publicHost: v });
               }}
-              placeholder="留空自动取面板域名"
+              placeholder={i18n.t('settings.k042')}
               className="max-w-xs font-mono text-[13px]"
             />
           </Row>
-          <Row label="跳过证书校验" hint="自签证书时客户端需要">
+          <Row label={i18n.t('settings.k043')} hint={i18n.t('settings.k044')}>
             <EnabledSwitch
               enabled={settings.skipCertVerify}
               disabled={saving}
@@ -235,7 +238,7 @@ export default function SettingsPage({
               }
             />
           </Row>
-          <Row label="订阅信息" hint="在客户端显示流量与到期">
+          <Row label={i18n.t('settings.k045')} hint={i18n.t('settings.k046')}>
             <EnabledSwitch
               enabled={settings.showUserinfo}
               disabled={saving}
@@ -244,7 +247,7 @@ export default function SettingsPage({
               }
             />
           </Row>
-          <Row label="自动更新间隔" hint="客户端拉取订阅的周期">
+          <Row label={i18n.t('settings.k047')} hint={i18n.t('settings.k048')}>
             <div className="flex items-center gap-2">
               <Input
                 type="number"
@@ -257,7 +260,7 @@ export default function SettingsPage({
                 className="w-24"
               />
               <span className="text-sm text-muted-foreground">
-                小时（0 = 不指定）
+                {i18n.t('settings.k060')}
               </span>
             </div>
           </Row>
@@ -266,11 +269,25 @@ export default function SettingsPage({
 
       <SettingCard
         icon={<Type className="h-[18px] w-[18px]" />}
-        title="界面"
-        desc="面板自身的显示行为。"
+        title={i18n.t('settings.k049')}
+        desc={i18n.t('settings.k050')}
       >
         <div className="divide-y">
-          <Row label="允许选中文本" hint="关闭后页面文本长按无法选中">
+          <Row label={i18n.t('settings.language')} hint={i18n.t('settings.languageHint')}>
+            <Select
+              value={i18n.language === "en" ? "en" : "zh"}
+              onValueChange={(v) => void setLanguage(v as SupportedLanguage)}
+            >
+              <SelectTrigger className="w-full max-w-[280px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="zh">{i18n.t('settings.languageZh')}</SelectItem>
+                <SelectItem value="en">{i18n.t('settings.languageEn')}</SelectItem>
+              </SelectContent>
+            </Select>
+          </Row>
+          <Row label={i18n.t('settings.k051')} hint={i18n.t('settings.k052')}>
             <EnabledSwitch
               enabled={settings.textSelectable}
               disabled={saving}
@@ -279,7 +296,7 @@ export default function SettingsPage({
               }
             />
           </Row>
-          <Row label="时区" hint="统一面板时区设置">
+          <Row label={i18n.t('settings.k053')} hint={i18n.t('settings.k054')}>
             <Select
               value={settings.timezone}
               disabled={saving}
@@ -289,14 +306,14 @@ export default function SettingsPage({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {TIMEZONE_OPTIONS.some(
+                {timezoneOptions().some(
                   (o) => o.value === settings.timezone,
                 ) ? null : (
                   <SelectItem value={settings.timezone}>
                     {settings.timezone}
                   </SelectItem>
                 )}
-                {TIMEZONE_OPTIONS.map((o) => (
+                {timezoneOptions().map((o) => (
                   <SelectItem key={o.value} value={o.value}>
                     {o.label}
                   </SelectItem>
@@ -304,7 +321,7 @@ export default function SettingsPage({
               </SelectContent>
             </Select>
           </Row>
-          <Row label="显示黄色警告" hint="关闭后隐藏黄色警告">
+          <Row label={i18n.t('settings.k055')} hint={i18n.t('settings.k056')}>
             <EnabledSwitch
               enabled={settings.showWarnings}
               disabled={saving}
@@ -314,8 +331,8 @@ export default function SettingsPage({
             />
           </Row>
           <Row
-            label="数据刷新频率"
-            hint="仪表盘与在线统计的刷新间隔"
+            label={i18n.t('settings.k057')}
+            hint={i18n.t('settings.k058')}
           >
             <div className="flex items-center gap-2">
               <Input
@@ -328,7 +345,7 @@ export default function SettingsPage({
                 onBlur={commitDashInterval}
                 className="w-24"
               />
-              <span className="text-sm text-muted-foreground">秒</span>
+              <span className="text-sm text-muted-foreground">{i18n.t('settings.k059')}</span>
             </div>
           </Row>
         </div>
@@ -336,7 +353,7 @@ export default function SettingsPage({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        这些选项保存后即时生效。
+        {i18n.t('settings.k061')}
       </p>
     </div>
   );

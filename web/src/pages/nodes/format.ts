@@ -1,6 +1,7 @@
+import { dateLocale } from "@/lib/i18n";
 export function fmtTime(ts: number): string {
   if (!ts) return "—";
-  return new Date(ts * 1000).toLocaleString("zh-CN", { hour12: false });
+  return new Date(ts * 1000).toLocaleString(dateLocale(), { hour12: false });
 }
 
 export function fmtBytes(n: number): string {

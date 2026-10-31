@@ -7,6 +7,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import type { SubscriptionView } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 export const ICON_BTN_CLS =
   "flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground";
@@ -37,8 +38,8 @@ export function RowActions({
     <div className="flex items-center gap-1">
       <button
         type="button"
-        title="复制订阅链接"
-        aria-label="复制订阅链接"
+        title={i18n.t('subscriptions.k030')}
+        aria-label={i18n.t('subscriptions.k030')}
         onClick={onCopyLink}
         className={ICON_BTN_CLS}
       >
@@ -46,8 +47,8 @@ export function RowActions({
       </button>
       <button
         type="button"
-        title="二维码"
-        aria-label="二维码"
+        title={i18n.t('subscriptions.k031')}
+        aria-label={i18n.t('subscriptions.k031')}
         onClick={onQr}
         className={ICON_BTN_CLS}
       >
@@ -57,8 +58,8 @@ export function RowActions({
         <DropdownMenuTrigger asChild>
           <button
             type="button"
-            title="更多操作"
-            aria-label="更多操作"
+            title={i18n.t('subscriptions.k032')}
+            aria-label={i18n.t('subscriptions.k032')}
             className={ICON_BTN_CLS}
           >
             <Ellipsis className="h-4 w-4" />
@@ -67,27 +68,27 @@ export function RowActions({
         <DropdownMenuContent align="end" className="w-32">
           <DropdownMenuItem className="text-[13px]" onClick={onEdit}>
             <Pencil className="mr-1.5 h-4 w-4" />
-            编辑
+            {i18n.t('subscriptions.k086')}
           </DropdownMenuItem>
           <DropdownMenuItem className="text-[13px]" onClick={onResetLink}>
             <Link2 className="mr-1.5 h-4 w-4" />
-            更换链接
+            {i18n.t('subscriptions.k087')}
           </DropdownMenuItem>
           <DropdownMenuItem className="text-[13px]" onClick={onResetAll}>
             <RefreshCw className="mr-1.5 h-4 w-4" />
-            重置链接
+            {i18n.t('subscriptions.k088')}
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem className="text-[13px]" onClick={onToggleEnabled}>
             <Power className="mr-1.5 h-4 w-4" />
-            {v.enabled ? "停用" : "启用"}
+            {v.enabled ? i18n.t('subscriptions.k033') : i18n.t('subscriptions.k034')}
           </DropdownMenuItem>
           <DropdownMenuItem
             className="text-[13px]"
             onClick={onDelete}
           >
             <Trash className="mr-1.5 h-4 w-4" />
-            删除
+            {i18n.t('subscriptions.k089')}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

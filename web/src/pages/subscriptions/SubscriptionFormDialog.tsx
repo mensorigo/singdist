@@ -33,6 +33,7 @@ import {
   type UnitKey,
 } from "./format";
 import { PreviewDialog } from "./PreviewDialog";
+import i18n from "@/lib/i18n";
 
 export function SubscriptionFormDialog({
   item,
@@ -65,7 +66,7 @@ export function SubscriptionFormDialog({
     e.preventDefault();
     setFormError(null);
     if (!templateId) {
-      setFormError("请先新建一个模板再创建订阅");
+      setFormError(i18n.t('subscriptions.k043'));
       return;
     }
     setSubmitting(true);
@@ -83,14 +84,14 @@ export function SubscriptionFormDialog({
       };
       if (creating) {
         await api.subscriptions.create(body);
-        toast.success("订阅已创建");
+        toast.success(i18n.t('subscriptions.k044'));
       } else {
         await api.subscriptions.update(item.id, body);
-        toast.success("订阅已保存");
+        toast.success(i18n.t('subscriptions.k045'));
       }
       await onSaved();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "保存失败，请重试");
+      setFormError(err instanceof ApiError ? err.message : i18n.t('subscriptions.k046'));
     } finally {
       setSubmitting(false);
     }
@@ -105,21 +106,21 @@ export function SubscriptionFormDialog({
     >
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{creating ? "新建订阅" : "编辑订阅"}</DialogTitle>
+          <DialogTitle>{creating ? i18n.t('subscriptions.k047') : i18n.t('subscriptions.k048')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="sub-name">名称</Label>
+            <Label htmlFor="sub-name">{i18n.t('subscriptions.k049')}</Label>
             <Input
               id="sub-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="例如：Kavorys"
+              placeholder={i18n.t('subscriptions.k050')}
               required
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="sub-tpl">绑定模板</Label>
+            <Label htmlFor="sub-tpl">{i18n.t('subscriptions.k051')}</Label>
             <Select
               value={String(templateId)}
               onValueChange={(v) => setTemplateId(Number(v))}
@@ -129,11 +130,11 @@ export function SubscriptionFormDialog({
               </SelectTrigger>
               <SelectContent>
                 {templates.length === 0 && (
-                  <SelectItem value="0">（暂无模板）</SelectItem>
+                  <SelectItem value="0">{i18n.t('subscriptions.k052')}</SelectItem>
                 )}
                 {templates.map((t) => (
                   <SelectItem key={t.id} value={String(t.id)}>
-                    {t.name}（{t.inboundIds.length} 个入站）
+                    {i18n.t('subscriptions.k092', { value: t.name, value2: t.inboundIds.length })}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -141,7 +142,7 @@ export function SubscriptionFormDialog({
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-2">
-              <Label htmlFor="sub-limit">流量上限（0 = 不限）</Label>
+              <Label htmlFor="sub-limit">{i18n.t('subscriptions.k053')}</Label>
               <div className="flex gap-2">
                 <Input
                   id="sub-limit"
@@ -156,7 +157,7 @@ export function SubscriptionFormDialog({
                   onValueChange={(v) => setLimitUnit(v as UnitKey)}
                 >
                   <SelectTrigger
-                    aria-label="流量单位"
+                    aria-label={i18n.t('subscriptions.k054')}
                     className="w-20 shrink-0 px-2"
                   >
                     <SelectValue />
@@ -172,7 +173,7 @@ export function SubscriptionFormDialog({
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="sub-expire">到期日期（留空 = 永不过期）</Label>
+              <Label htmlFor="sub-expire">{i18n.t('subscriptions.k055')}</Label>
               <Input
                 id="sub-expire"
                 type="date"
@@ -183,7 +184,7 @@ export function SubscriptionFormDialog({
           </div>
           {!creating && item && (
             <div className="space-y-2">
-              <Label>订阅链接</Label>
+              <Label>{i18n.t('subscriptions.k056')}</Label>
               <div className="flex gap-2">
                 <Input
                   value={`${window.location.origin}/sub/${item.token}`}
@@ -196,13 +197,13 @@ export function SubscriptionFormDialog({
                   onClick={() =>
                     void copyText(
                       `${window.location.origin}/sub/${item.token}`,
-                      "订阅链接已复制",
+                      i18n.t('subscriptions.k057'),
                     )
                   }
                   className="h-9 shrink-0 rounded-xl px-3"
                 >
                   <Copy className="h-4 w-4" />
-                  复制
+                  {i18n.t('subscriptions.k093')}
                 </Button>
                 <Button
                   type="button"
@@ -211,17 +212,17 @@ export function SubscriptionFormDialog({
                   className="h-9 shrink-0 rounded-xl px-3"
                 >
                   <Eye className="h-4 w-4" />
-                  预览
+                  {i18n.t('subscriptions.k094')}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                更换链接：列表「···」菜单 → 更换链接。
+                {i18n.t('subscriptions.k095')}
               </p>
             </div>
           )}
           {!creating && item && (
             <div className="space-y-2">
-              <Label>UUID（核心用户标识）</Label>
+              <Label>{i18n.t('subscriptions.k058')}</Label>
               <div className="flex gap-2">
                 <Input
                   value={item.uuid}
@@ -235,10 +236,10 @@ export function SubscriptionFormDialog({
                     try {
                       await navigator.clipboard.writeText(item.uuid);
                       setCopied(true);
-                      toast.success("UUID 已复制");
+                      toast.success(i18n.t('subscriptions.k059'));
                       setTimeout(() => setCopied(false), 1500);
                     } catch {
-                      setFormError("复制失败，请手动复制");
+                      setFormError(i18n.t('subscriptions.k060'));
                     }
                   }}
                   className="h-9 shrink-0 rounded-xl px-3"
@@ -248,11 +249,11 @@ export function SubscriptionFormDialog({
                   ) : (
                     <Copy className="h-4 w-4" />
                   )}
-                  复制
+                  {i18n.t('subscriptions.k096')}
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                更换 UUID：列表「···」菜单 → 重置链接。
+                {i18n.t('subscriptions.k097')}
               </p>
             </div>
           )}
@@ -266,10 +267,10 @@ export function SubscriptionFormDialog({
               onClick={onClose}
               disabled={submitting}
             >
-              取消
+              {i18n.t('subscriptions.k098')}
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? "保存中…" : creating ? "创建" : "保存"}
+              {submitting ? i18n.t('subscriptions.k061') : creating ? i18n.t('subscriptions.k062') : i18n.t('subscriptions.k063')}
             </Button>
           </DialogFooter>
         </form>

@@ -2,6 +2,7 @@ import { useRef } from "react";
 import { ClipboardPaste, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import i18n from "@/lib/i18n";
 
 const TEXTAREA_CLS =
   "w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -29,7 +30,7 @@ export function PemField({
       const text = await navigator.clipboard.readText();
       if (text) onChange(text);
     } catch {
-      onError("读取剪贴板失败：浏览器未授权，请用“上传文件”或手动粘贴（Ctrl+V）");
+      onError(i18n.t('certificates.k042'));
     }
   }
 
@@ -38,7 +39,7 @@ export function PemField({
     try {
       onChange(await file.text());
     } catch {
-      onError("读取文件失败，请重试");
+      onError(i18n.t('certificates.k043'));
     }
   }
 
@@ -54,7 +55,7 @@ export function PemField({
             className="h-7 px-2 text-xs"
           >
             <ClipboardPaste />
-            粘贴
+            {i18n.t('certificates.k062')}
           </Button>
           <Button
             type="button"
@@ -63,7 +64,7 @@ export function PemField({
             className="h-7 px-2 text-xs"
           >
             <Upload />
-            上传文件
+            {i18n.t('certificates.k063')}
           </Button>
         </div>
       </div>

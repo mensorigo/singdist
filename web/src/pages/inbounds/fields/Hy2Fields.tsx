@@ -10,6 +10,7 @@ import {
 } from "@/components/ui/select";
 import { SecretInput } from "../SecretInput";
 import { randomHex } from "../helpers";
+import i18n from "@/lib/i18n";
 
 interface Hy2FieldsProps {
   upMbps: number;
@@ -42,7 +43,7 @@ export function Hy2Fields({
             <>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="inb-up">上行 Mbps（0 = 不限）</Label>
+                  <Label htmlFor="inb-up">{i18n.t('inbounds.fields.k005')}</Label>
                   <Input
                     id="inb-up"
                     type="number"
@@ -52,7 +53,7 @@ export function Hy2Fields({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="inb-down">下行 Mbps（0 = 不限）</Label>
+                  <Label htmlFor="inb-down">{i18n.t('inbounds.fields.k006')}</Label>
                   <Input
                     id="inb-down"
                     type="number"
@@ -64,26 +65,26 @@ export function Hy2Fields({
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="inb-pw">访问密码</Label>
+                  <Label htmlFor="inb-pw">{i18n.t('inbounds.fields.k007')}</Label>
                   <Button
                     type="button"
                     variant="outline"
                     onClick={() => setPassword(randomHex(8))}
                     className="h-7 rounded-lg px-2 text-xs"
                   >
-                    随机生成
+                    {i18n.t('inbounds.fields.k031')}
                   </Button>
                 </div>
                 <SecretInput
                   id="inb-pw"
                   value={password}
                   onChange={setPassword}
-                  placeholder="留空则创建时自动生成"
+                  placeholder={i18n.t('inbounds.fields.k008')}
                 />
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="inb-obfs">混淆</Label>
+                  <Label htmlFor="inb-obfs">{i18n.t('inbounds.fields.k009')}</Label>
                   <Select
                     value={obfs === "" ? "none" : obfs}
                     onValueChange={(v) => setObfs(v === "none" ? "" : v)}
@@ -92,7 +93,7 @@ export function Hy2Fields({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">无</SelectItem>
+                      <SelectItem value="none">{i18n.t('inbounds.fields.k010')}</SelectItem>
                       <SelectItem value="salamander">salamander</SelectItem>
                       {/* Temporary option for a value outside the fixed
                       list: shown while current, gone once a standard
@@ -107,12 +108,12 @@ export function Hy2Fields({
                 </div>
                 {obfs === "salamander" && (
                   <div className="space-y-2">
-                    <Label htmlFor="inb-obfspw">混淆密码</Label>
+                    <Label htmlFor="inb-obfspw">{i18n.t('inbounds.fields.k011')}</Label>
                     <SecretInput
                       id="inb-obfspw"
                       value={obfsPassword}
                       onChange={setObfsPassword}
-                      placeholder="留空则自动生成"
+                      placeholder={i18n.t('inbounds.fields.k012')}
                     />
                   </div>
                 )}

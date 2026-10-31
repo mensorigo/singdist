@@ -7,6 +7,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import type { SubscriptionView } from "@/lib/api";
+import i18n from "@/lib/i18n";
 
 export function QrDialog({
   sub,
@@ -45,12 +46,12 @@ export function QrDialog({
           {qr ? (
             <img
               src={qr}
-              alt="订阅链接二维码"
+              alt={i18n.t('subscriptions.k029')}
               className="h-[240px] w-[240px] rounded-lg border"
             />
           ) : (
             <p className="py-10 text-sm text-muted-foreground">
-              二维码生成失败
+              {i18n.t('subscriptions.k085')}
             </p>
           )}
         </div>

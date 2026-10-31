@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import AppLayout, { ROUTES, type RouteKey } from "@/components/layout/AppLayout";
 import { Toaster } from "@/components/ui/sonner";
@@ -13,6 +14,7 @@ import NodesPage from "@/pages/NodesPage";
 import SecurityPage from "@/pages/SecurityPage";
 import SettingsPage from "@/pages/SettingsPage";
 import SubscriptionsPage from "@/pages/SubscriptionsPage";
+import i18n from "@/lib/i18n";
 
 function routeFromPath(path: string): RouteKey {
   const found = ROUTES.find((r) => r.path === path);
@@ -29,6 +31,9 @@ type AuthState =
   | { phase: "authed"; username: string };
 
 export default function App() {
+  // Re-render the whole tree on language change so i18n.t() calls in
+  // child components and helpers pick up the new language immediately.
+  useTranslation();
   const { theme, toggleTheme } = useTheme();
   const [auth, setAuth] = useState<AuthState>({ phase: "loading" });
   const [route, setRoute] = useState<RouteKey>(() =>
@@ -123,7 +128,7 @@ export default function App() {
   if (auth.phase === "loading") {
     return (
       <div className="flex min-h-svh items-center justify-center text-sm text-muted-foreground">
-        加载中…
+        {i18n.t('app.k001')}
       </div>
     );
   }

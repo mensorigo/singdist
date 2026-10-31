@@ -46,6 +46,7 @@ import { TuicFields } from "./fields/TuicFields";
 import { AnyTlsFields } from "./fields/AnyTlsFields";
 import { TrojanFields } from "./fields/TrojanFields";
 import { buildParams } from "./params";
+import i18n from "@/lib/i18n";
 
 export function InboundFormDialog({
   item,
@@ -118,7 +119,7 @@ export function InboundFormDialog({
   const [nodes, setNodes] = useState<NodeView[]>([]);
   // 本机 row label: hostname + (IP:port) once loaded, plain 本机 until
   // then (and forever if the endpoint fails — the form never breaks).
-  const [localLabel, setLocalLabel] = useState("本机");
+  const [localLabel, setLocalLabel] = useState(i18n.t('inbounds.k015'));
   const [machine, setMachine] = useState<string>(
     creating ? "local" : item?.runLocal ? "local" : "",
   );
@@ -174,10 +175,10 @@ export function InboundFormDialog({
     try {
       await navigator.clipboard.writeText(publicKey);
       setCopied(true);
-      toast.success("公钥已复制");
+      toast.success(i18n.t('inbounds.k016'));
       setTimeout(() => setCopied(false), 1500);
     } catch {
-      setFormError("复制失败，请手动选择公钥文本复制");
+      setFormError(i18n.t('inbounds.k017'));
     }
   };
 
@@ -188,7 +189,7 @@ export function InboundFormDialog({
       setPrivateKey(kp.privateKey);
       if (!shortId) setShortId(kp.shortId);
     } catch {
-      setFormError("生成密钥失败，请重试");
+      setFormError(i18n.t('inbounds.k018'));
     }
   };
 
@@ -210,7 +211,7 @@ export function InboundFormDialog({
     try {
       const params = buildParams({ protocol, sni, flow, publicKey, privateKey, shortId, upMbps, downMbps, password, obfs, obfsPassword, tuicUuid, tuicPassword, tuicCongestion, tuicSni, alPassword, alSni, tjPassword, tjSni });
       if (!Number.isInteger(port) || port < 1 || port > 65535) {
-        setFormError("端口无效（1-65535）");
+        setFormError(i18n.t('inbounds.k019'));
         return;
       }
       // "" means the stored machine never resolved (fetch failed): keep
@@ -233,7 +234,7 @@ export function InboundFormDialog({
           runLocal,
         });
         inboundId = created.id;
-        toast.success("入站已创建");
+        toast.success(i18n.t('inbounds.k020'));
       } else {
         await api.inbounds.update(item.id, {
           name: name.trim(),
@@ -242,7 +243,7 @@ export function InboundFormDialog({
           runLocal,
         });
         inboundId = item.id;
-        toast.success("入站已保存");
+        toast.success(i18n.t('inbounds.k021'));
       }
       // Create: save assignments only when a node is picked (local needs none).
       // Edit: save only when the assignment set actually changed, so an
@@ -269,7 +270,7 @@ export function InboundFormDialog({
       }
       await onSaved();
     } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "保存失败，请重试");
+      setFormError(err instanceof ApiError ? err.message : i18n.t('inbounds.k022'));
     } finally {
       setSubmitting(false);
     }
@@ -285,20 +286,20 @@ export function InboundFormDialog({
     >
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{creating ? "新建入站" : "编辑入站"}</DialogTitle>
+          <DialogTitle>{creating ? i18n.t('inbounds.k023') : i18n.t('inbounds.k024')}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           {showWarnings && !creating && item.status === "drifted" && item.diffs && item.diffs.length > 0 && (
             <div className="rounded-[18px] border border-amber-500/40 bg-amber-500/10 px-4 py-3">
               <p className="text-[13px] font-medium text-amber-700 dark:text-amber-300">
-                与运行配置不一致
+                {i18n.t('inbounds.k065')}
               </p>
               <DiffsList diffs={item.diffs} />
             </div>
           )}
           {creating && (
             <div className="space-y-2">
-              <Label>协议</Label>
+              <Label>{i18n.t('inbounds.k025')}</Label>
               <div className="grid grid-cols-3 gap-2">
                 {(
                   Object.keys(PROTOCOL_LABEL) as InboundProtocol[]
@@ -320,21 +321,21 @@ export function InboundFormDialog({
             </div>
           )}
           <div className="space-y-2">
-            <Label htmlFor="inb-name">名称</Label>
+            <Label htmlFor="inb-name">{i18n.t('inbounds.k026')}</Label>
             <Input
               id="inb-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="入站节点备注"
+              placeholder={i18n.t('inbounds.k027')}
               required
             />
           </div>
 
           <div className="space-y-2">
-            <Label>运行机器</Label>
+            <Label>{i18n.t('inbounds.k028')}</Label>
             <Select value={machine} onValueChange={setMachine}>
               <SelectTrigger>
-                <SelectValue placeholder="选择机器" />
+                <SelectValue placeholder={i18n.t('inbounds.k029')} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="local">{localLabel}</SelectItem>
@@ -347,18 +348,18 @@ export function InboundFormDialog({
             </Select>
             <p className="text-xs text-muted-foreground">
               {nodes.length === 0
-                ? "还没有节点，先去「节点」页添加。"
-                : "选中的机器会跑这个入站，订阅里会出现这台机器的入口。"}
+                ? i18n.t('inbounds.k030')
+                : i18n.t('inbounds.k031')}
             </p>
             {multiMachine && (
               <p className="text-xs text-muted-foreground">
-                这个入站现在跑在多台机器上，保存后将只留选中的一台
+                {i18n.t('inbounds.k066')}
               </p>
             )}
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="inb-port">端口</Label>
+            <Label htmlFor="inb-port">{i18n.t('inbounds.k032')}</Label>
             <Input
               id="inb-port"
               type="number"
@@ -446,10 +447,10 @@ export function InboundFormDialog({
               onClick={onClose}
               disabled={submitting}
             >
-              取消
+              {i18n.t('inbounds.k067')}
             </Button>
             <Button type="submit" disabled={submitting}>
-              {submitting ? "保存中…" : creating ? "创建" : "保存"}
+              {submitting ? i18n.t('inbounds.k033') : creating ? i18n.t('inbounds.k034') : i18n.t('inbounds.k035')}
             </Button>
           </DialogFooter>
         </form>
@@ -466,12 +467,12 @@ export function InboundFormDialog({
       >
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>保存失败</DialogTitle>
+            <DialogTitle>{i18n.t('inbounds.k036')}</DialogTitle>
             <DialogDescription>{formError ?? ""}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button type="button" onClick={() => setFormError(null)}>
-              知道了
+              {i18n.t('inbounds.k068')}
             </Button>
           </DialogFooter>
         </DialogContent>
