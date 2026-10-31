@@ -131,17 +131,17 @@ type fileFollower struct {
 	log  *slog.Logger
 	loc  func(context.Context) *time.Location
 
-	pending     map[string]*pendingGroup
-	batch       []store.CoreLogRow
-	fh          *os.File
-	inode       uint64
-	offset      int64 // file position after the last read (includes any partial line)
-	partial     []byte
-	firstLine   string // first complete line, "" = not yet observed
-	savedInode  uint64
-	savedOffset int64
-	hasSaved    bool
-	lastPrune   time.Time
+	pending       map[string]*pendingGroup
+	batch         []store.CoreLogRow
+	fh            *os.File
+	inode         uint64
+	offset        int64 // file position after the last read (includes any partial line)
+	partial       []byte
+	firstLine     string // first complete line, "" = not yet observed
+	savedInode    uint64
+	savedOffset   int64
+	hasSaved      bool
+	lastPrune     time.Time
 	lastRotateDay string
 }
 
@@ -309,6 +309,12 @@ func (f *fileFollower) flush(ctx context.Context, all bool) {
 // chunks while the table stays past the size cap (busy nodes trade
 // history for disk safety instead of growing unbounded).
 func (f *fileFollower) prune(ctx context.Context, now time.Time) {
+	// Sync retention mirrors core logs (90 days) but in Unix seconds
+	// (sync `at` is seconds; core `ts` is milliseconds). A failure
+	// here must not block core pruning, so warn and continue.
+	if err := f.st.PruneSyncLogs(ctx, now.Add(-store.SyncLogRetention).Unix()); err != nil {
+		f.log.Warn("logs: sync prune failed", "err", err)
+	}
 	if err := f.st.PruneCoreLogs(ctx, now.Add(-store.CoreLogRetention).UnixMilli()); err != nil {
 		f.log.Warn("logs: file follow prune failed", "err", err)
 		return

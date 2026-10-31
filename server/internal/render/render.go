@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -26,15 +25,12 @@ type Error struct {
 }
 
 func (e *Error) Error() string { return e.Message }
-
 func errValidation(msg string) *Error {
 	return &Error{Status: 400, Code: "validation", Message: msg}
 }
-
 func errNotFound(what string) *Error {
 	return &Error{Status: 404, Code: what + "_not_found", Message: what + " not found"}
 }
-
 func errUnavailable(msg string) *Error {
 	return &Error{Status: 403, Code: "subscription_unavailable", Message: msg}
 }
@@ -55,173 +51,6 @@ func NewService(st *store.Store, settingsSvc *settings.Service) *Service {
 // SUBSCRIPTION's uuid; password protocols carry the inbound's shared
 // password (per-subscription users for them arrive with the sync
 // engine).
-type Node struct {
-	Name     string
-	Protocol string
-	Server   string
-	Port     int
-
-	UUID string // vless, tuic
-
-	// vless-reality
-	Flow      string
-	SNI       string
-	PublicKey string
-	ShortID   string
-
-	// password protocols (hysteria2, tuic, shadowsocks, anytls, trojan)
-	Password string
-
-	// hysteria2
-	UpMbps       int
-	DownMbps     int
-	Obfs         string
-	ObfsPassword string
-
-	// tuic
-	Congestion string
-
-	// shadowsocks
-	Method string
-}
-
-// Local mirrors of the inbound params JSON (the params blob is the
-// contract between the inbounds module and this one).
-type realityParams struct {
-	SNI       string `json:"sni"`
-	PublicKey string `json:"publicKey"`
-	ShortID   string `json:"shortId"`
-	Flow      string `json:"flow"`
-}
-
-type hy2Params struct {
-	UpMbps       int    `json:"upMbps"`
-	DownMbps     int    `json:"downMbps"`
-	Password     string `json:"password"`
-	Obfs         string `json:"obfs"`
-	ObfsPassword string `json:"obfsPassword"`
-}
-
-type tuicParams struct {
-	Password          string `json:"password"`
-	CongestionControl string `json:"congestionControl"`
-	SNI               string `json:"sni"`
-}
-
-type ssParams struct {
-	Method   string `json:"method"`
-	Password string `json:"password"`
-}
-
-type passwordSNIParams struct {
-	Password string `json:"password"`
-	SNI      string `json:"sni"`
-}
-
-func (s *Service) buildNodes(ctx context.Context, sub store.SubscriptionRow, host string, namePrefix string) ([]Node, error) {
-	tpl, err := s.st.GetTemplate(ctx, sub.TemplateID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, errNotFound("template")
-		}
-		return nil, err
-	}
-	var ids []int64
-	if err := json.Unmarshal([]byte(tpl.InboundIDs), &ids); err != nil {
-		ids = []int64{}
-	}
-	rows, err := s.st.ListInbounds(ctx)
-	if err != nil {
-		return nil, err
-	}
-	byID := map[int64]store.InboundRow{}
-	for _, r := range rows {
-		byID[r.ID] = r
-	}
-
-	nodes := []Node{}
-	usedNames := map[string]int{}
-	for _, id := range ids {
-		ib, ok := byID[id]
-		if !ok || !ib.Enabled {
-			continue
-		}
-		n := Node{Protocol: ib.Protocol, Server: host, Port: ib.Port}
-		name := ib.Name
-		if namePrefix != "" {
-			name = namePrefix + "-" + name
-		}
-		usedNames[name]++
-		if usedNames[name] > 1 {
-			name = fmt.Sprintf("%s-%d", name, usedNames[name])
-		}
-		n.Name = name
-
-		switch ib.Protocol {
-		case "vless-reality":
-			var p realityParams
-			_ = json.Unmarshal([]byte(ib.Params), &p)
-			n.UUID = sub.UUID
-			n.Flow = p.Flow
-			n.SNI = p.SNI
-			n.PublicKey = p.PublicKey
-			n.ShortID = p.ShortID
-		case "hysteria2":
-			var p hy2Params
-			_ = json.Unmarshal([]byte(ib.Params), &p)
-			n.Password = p.Password
-			n.UpMbps = p.UpMbps
-			n.DownMbps = p.DownMbps
-			n.Obfs = p.Obfs
-			n.ObfsPassword = p.ObfsPassword
-			n.SNI = host
-		case "tuic":
-			var p tuicParams
-			_ = json.Unmarshal([]byte(ib.Params), &p)
-			n.UUID = sub.UUID
-			n.Password = p.Password
-			n.Congestion = p.CongestionControl
-			if n.Congestion == "" {
-				n.Congestion = "bbr"
-			}
-			n.SNI = p.SNI
-		case "shadowsocks":
-			var p ssParams
-			_ = json.Unmarshal([]byte(ib.Params), &p)
-			n.Method = p.Method
-			n.Password = p.Password
-		case "anytls", "trojan":
-			var p passwordSNIParams
-			_ = json.Unmarshal([]byte(ib.Params), &p)
-			n.Password = p.Password
-			n.SNI = p.SNI
-		default:
-			continue
-		}
-		nodes = append(nodes, n)
-	}
-	return nodes, nil
-}
-
-// --- status -------------------------------------------------------------------
-
-// statusOf mirrors the subs module's derived status; render keeps its
-// own copy so the modules stay independent.
-func statusOf(r store.SubscriptionRow, now int64) string {
-	switch {
-	case !r.Enabled:
-		return "disabled"
-	case r.ExpireAt > 0 && r.ExpireAt < now:
-		return "expired"
-	case r.LimitBytes > 0 && r.UsedUp+r.UsedDown >= r.LimitBytes:
-		return "over_quota"
-	default:
-		return "active"
-	}
-}
-
-// --- rendering ------------------------------------------------------------------
-
 type Result struct {
 	Body        string
 	ContentType string
@@ -236,6 +65,9 @@ type Result struct {
 	UpdateHrs  int
 }
 
+// Render builds the subscription document. format "" resolves to the
+// settings default; reqHost supplies the node server address when no
+// public host is configured.
 // Render builds the subscription document. format "" resolves to the
 // settings default; reqHost supplies the node server address when no
 // public host is configured.
@@ -260,9 +92,54 @@ func (s *Service) Render(ctx context.Context, sub store.SubscriptionRow, format,
 		host = stripPort(reqHost)
 	}
 
-	nodes, err := s.buildNodes(ctx, sub, host, cfg.NodeName)
+	nodes, err := s.buildAllNodes(ctx, sub, host)
 	if err != nil {
 		return Result{}, err
+	}
+
+	// Proxy groups for Clash: effective template groups (defaults when
+	// the template stores none), each mapped to the generated node
+	// names whose inbound is in the group. A group with no generated
+	// nodes is skipped, so a group over a disabled/paused inbound
+	// simply disappears instead of rendering an empty group.
+	var clashGroups []ClashGroup
+	if tpl, terr := s.st.GetTemplate(ctx, sub.TemplateID); terr == nil {
+		var tplIDs []int64
+		_ = json.Unmarshal([]byte(tpl.InboundIDs), &tplIDs)
+		for _, g := range store.EffectiveProxyGroups(tpl.Groups, tplIDs) {
+			if !g.Enabled {
+				continue
+			}
+			want := map[int64]bool{}
+			for _, id := range g.InboundIDs {
+				want[id] = true
+			}
+			names := []string{}
+			seenNames := map[string]bool{}
+			for _, n := range nodes {
+				if want[n.InboundID] && !seenNames[n.Name] {
+					seenNames[n.Name] = true
+					names = append(names, n.Name)
+				}
+			}
+			if len(names) == 0 {
+				continue
+			}
+			clashGroups = append(clashGroups, ClashGroup{
+				Name: g.Name, Type: g.Type, Proxies: names,
+				URL: g.URL, Interval: g.Interval, Tolerance: g.Tolerance,
+			})
+		}
+	}
+	if len(clashGroups) == 0 {
+		// Fallback: never render a subscription without a group.
+		all := []string{}
+		for _, n := range nodes {
+			all = append(all, n.Name)
+		}
+		if len(all) > 0 {
+			clashGroups = []ClashGroup{{Name: "Proxy", Type: "select", Proxies: all}}
+		}
 	}
 
 	res := Result{
@@ -277,7 +154,7 @@ func (s *Service) Render(ctx context.Context, sub store.SubscriptionRow, format,
 	}
 	switch format {
 	case "clash":
-		res.Body = renderClash(nodes, cfg, host)
+		res.Body = renderClash(nodes, clashGroups, cfg, host)
 		res.ContentType = "text/yaml; charset=utf-8"
 	case "singbox":
 		body, err := renderSingbox(nodes, cfg, host)
@@ -290,6 +167,8 @@ func (s *Service) Render(ctx context.Context, sub store.SubscriptionRow, format,
 	return res, nil
 }
 
+// RenderByToken is the public /sub path: it enforces the derived
+// subscription status before rendering.
 // RenderByToken is the public /sub path: it enforces the derived
 // subscription status before rendering.
 func (s *Service) RenderByToken(ctx context.Context, token, format, reqHost string) (Result, error) {
@@ -314,6 +193,8 @@ func (s *Service) RenderByToken(ctx context.Context, token, format, reqHost stri
 
 // RenderByID is the admin preview path: it renders regardless of the
 // subscription's status.
+// RenderByID is the admin preview path: it renders regardless of the
+// subscription's status.
 func (s *Service) RenderByID(ctx context.Context, id int64, format, reqHost string) (Result, error) {
 	sub, err := s.st.GetSubscription(ctx, id)
 	if err != nil {
@@ -324,14 +205,12 @@ func (s *Service) RenderByID(ctx context.Context, id int64, format, reqHost stri
 	}
 	return s.Render(ctx, *sub, format, reqHost)
 }
-
 func stripPort(host string) string {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		return h
 	}
 	return host
 }
-
 func isIP(host string) bool {
 	return net.ParseIP(host) != nil
 }

@@ -1,84 +1,23 @@
 import {
   ArrowLeftRight,
-  ClipboardPaste,
   Trash,
   TriangleAlert,
-  Upload,
 } from "lucide-react";
 import {
   useCallback,
   useEffect,
-  useRef,
   useState,
-  type ReactNode,
 } from "react";
 
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { GenerateCard } from "./certificates/GenerateCard";
+import { DaysBadge, Field, formatDate, formatDateTime, ICON_BTN_CLS } from "./certificates/display";
+import { UploadCard } from "./certificates/UploadCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { api, ApiError, type CertInfo, type CertList } from "@/lib/api";
-import { cn } from "@/lib/utils";
-
-function formatDateTime(unix: number): string {
-  if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleString("zh-CN", { hour12: false });
-}
-
-function formatDate(unix: number): string {
-  if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleDateString("zh-CN");
-}
-
-function DaysBadge({
-  daysLeft,
-  expired,
-  showWarnings,
-}: {
-  daysLeft: number;
-  expired: boolean;
-  showWarnings: boolean;
-}) {
-  if (expired) {
-    return (
-      <span className="inline-flex rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-medium text-destructive">
-        已过期
-      </span>
-    );
-  }
-  const cls =
-    daysLeft < 15
-      ? "bg-destructive/10 text-destructive"
-      : daysLeft <= 60
-        ? showWarnings
-          ? "bg-amber-500/10 text-amber-600 dark:text-amber-400"
-          : "bg-muted text-muted-foreground"
-        : "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400";
-  return (
-    <span
-      className={cn(
-        "inline-flex rounded-full px-2 py-0.5 text-xs font-medium tabular-nums",
-        cls,
-      )}
-    >
-      {daysLeft} 天
-    </span>
-  );
-}
-
-function Field({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <div className="mt-1 text-sm">{children}</div>
-    </div>
-  );
-}
-
-const TEXTAREA_CLS =
-  "w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
 export default function CertificatesPage({
   refreshSignal,
@@ -196,7 +135,7 @@ export default function CertificatesPage({
       )}
 
       {/* Current certificate */}
-      <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+      <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
         <p className="text-base font-semibold">当前证书</p>
         {active ? (
           <div className="mt-4 space-y-5">
@@ -261,7 +200,7 @@ export default function CertificatesPage({
       </section>
 
       {/* Versions */}
-      <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+      <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
         <p className="text-base font-semibold">证书版本</p>
         {actionError && (
           <p className="mt-2 text-[13px] text-destructive">{actionError}</p>
@@ -350,29 +289,27 @@ export default function CertificatesPage({
                   </td>
                   <td className="py-2.5">
                     {!v.active && (
-                      <div className="flex items-center gap-3">
-                        <Button
-                          size="icon"
-                          variant="ghost"
+                      <div className="flex items-center gap-1">
+                        <button
+                          type="button"
                           title="启用"
                           aria-label="启用"
                           disabled={busyId === v.id}
                           onClick={() => void handleActivate(v)}
-                          className="h-8 w-8"
+                          className={`${ICON_BTN_CLS} disabled:opacity-50`}
                         >
                           <ArrowLeftRight className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
+                        </button>
+                        <button
+                          type="button"
                           title="删除"
                           aria-label="删除"
                           disabled={busyId === v.id}
                           onClick={() => handleDelete(v)}
-                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          className={`${ICON_BTN_CLS} disabled:opacity-50`}
                         >
                           <Trash className="h-4 w-4" />
-                        </Button>
+                        </button>
                       </div>
                     )}
                   </td>
@@ -416,228 +353,3 @@ export default function CertificatesPage({
   );
 }
 
-// One PEM input with paste-from-clipboard and file-upload shortcuts.
-function PemField({
-  id,
-  label,
-  placeholder,
-  value,
-  onChange,
-  onError,
-}: {
-  id: string;
-  label: string;
-  placeholder: string;
-  value: string;
-  onChange: (v: string) => void;
-  onError: (msg: string) => void;
-}) {
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  async function handlePaste() {
-    try {
-      const text = await navigator.clipboard.readText();
-      if (text) onChange(text);
-    } catch {
-      onError("读取剪贴板失败：浏览器未授权，请用“上传文件”或手动粘贴（Ctrl+V）");
-    }
-  }
-
-  async function handleFile(file: File | undefined) {
-    if (!file) return;
-    try {
-      onChange(await file.text());
-    } catch {
-      onError("读取文件失败，请重试");
-    }
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <Label htmlFor={id}>{label}</Label>
-        <div className="flex gap-1.5">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={handlePaste}
-            className="h-7 px-2 text-xs"
-          >
-            <ClipboardPaste />
-            粘贴
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() => fileRef.current?.click()}
-            className="h-7 px-2 text-xs"
-          >
-            <Upload />
-            上传文件
-          </Button>
-        </div>
-      </div>
-      <textarea
-        id={id}
-        rows={6}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className={TEXTAREA_CLS}
-        spellCheck={false}
-      />
-      <input
-        ref={fileRef}
-        type="file"
-        accept=".pem,.crt,.cer,.key,text/plain"
-        className="hidden"
-        onChange={(e) => {
-          void handleFile(e.target.files?.[0]);
-          e.target.value = "";
-        }}
-      />
-    </div>
-  );
-}
-
-// One-click self-signed certificate: the name is the address the admin
-// is using to view this page right now (domain or IP), validity 365
-// days, stored inactive — switching to it stays an explicit action in
-// the versions table above.
-function GenerateCard({ onGenerated }: { onGenerated: () => Promise<void> }) {
-  const [note, setNote] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [formSuccess, setFormSuccess] = useState<string | null>(null);
-
-  async function handleGenerate() {
-    setFormError(null);
-    setFormSuccess(null);
-    setSubmitting(true);
-    try {
-      const host = window.location.hostname;
-      const info = await api.certs.selfSigned([host], 365, note.trim(), false);
-      setNote("");
-      setFormSuccess(
-        `已生成：${info.commonName}（有效期 ${info.daysLeft} 天），已存入上方版本列表，需要时点“启用”即可切换`,
-      );
-      toast.success("证书生成成功");
-      await onGenerated();
-    } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "生成失败，请重试");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
-      <p className="text-base font-semibold">生成自签名证书</p>
-      <p className="mt-1 text-[13px] text-muted-foreground">
-        按你当前访问面板的地址（域名或 IP）一键生成一张自签名证书，有效期
-        365 天。生成后会进入上方版本列表，不会自动切换当前证书。
-      </p>
-      <div className="mt-4 max-w-md space-y-2">
-        <Label htmlFor="ss-note">备注名（可选）</Label>
-        <Input
-          id="ss-note"
-          value={note}
-          onChange={(e) => setNote(e.target.value)}
-          placeholder="不填则自动编号，如 CERT-8F3K"
-        />
-      </div>
-      {formError && <p className="mt-3 text-[13px] text-destructive">{formError}</p>}
-      {formSuccess && (
-        <p className="mt-3 text-[13px] text-emerald-600 dark:text-emerald-400">
-          {formSuccess}
-        </p>
-      )}
-      <Button className="mt-4" onClick={handleGenerate} disabled={submitting}>
-        {submitting ? "生成中…" : "一键生成自签名证书"}
-      </Button>
-    </section>
-  );
-}
-
-function UploadCard({ onUploaded }: { onUploaded: () => Promise<void> }) {
-  const [certPem, setCertPem] = useState("");
-  const [keyPem, setKeyPem] = useState("");
-  const [note, setNote] = useState("");
-  const [activate, setActivate] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [formSuccess, setFormSuccess] = useState<string | null>(null);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setFormError(null);
-    setFormSuccess(null);
-    setSubmitting(true);
-    try {
-      await api.certs.upload(certPem.trim(), keyPem.trim(), note.trim(), activate);
-      setCertPem("");
-      setKeyPem("");
-      setNote("");
-      setActivate(false);
-      setFormSuccess(activate ? "证书已保存并启用" : "证书已保存");
-      await onUploaded();
-    } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "上传失败，请重试");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  return (
-    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
-      <p className="text-base font-semibold">上传新证书</p>
-      <form onSubmit={handleSubmit} className="mt-4 space-y-4">
-        <div className="grid gap-4 md:grid-cols-2">
-          <PemField
-            id="cert-pem"
-            label="证书 PEM"
-            placeholder="-----BEGIN CERTIFICATE-----"
-            value={certPem}
-            onChange={setCertPem}
-            onError={setFormError}
-          />
-          <PemField
-            id="key-pem"
-            label="私钥 PEM"
-            placeholder="-----BEGIN PRIVATE KEY-----"
-            value={keyPem}
-            onChange={setKeyPem}
-            onError={setFormError}
-          />
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="cert-note">备注（可选）</Label>
-          <Input
-            id="cert-note"
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="不填则自动编号，如 CERT-8F3K"
-          />
-        </div>
-        <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={activate}
-            onChange={(e) => setActivate(e.target.checked)}
-            className="h-4 w-4 rounded border accent-primary"
-          />
-          保存并立即启用
-        </label>
-        {formError && <p className="text-[13px] text-destructive">{formError}</p>}
-        {formSuccess && (
-          <p className="text-[13px] text-emerald-600 dark:text-emerald-400">
-            {formSuccess}
-          </p>
-        )}
-        <Button type="submit" disabled={submitting}>
-          {submitting ? "上传中…" : "上传证书"}
-        </Button>
-      </form>
-    </section>
-  );
-}

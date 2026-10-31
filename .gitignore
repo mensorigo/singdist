@@ -17,6 +17,10 @@ data/
 # sidebar/test wiring in tracked files is removed before archival)
 web/src/pages/TestPage.tsx
 
+# Kept locally, never archived
+tests/
+ARCHITECTURE.md
+
 # Local environment
 .env
 

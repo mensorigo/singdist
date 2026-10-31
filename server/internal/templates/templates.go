@@ -65,17 +65,19 @@ func validateName(name string) (string, error) {
 // --- views --------------------------------------------------------------------
 
 type TemplateView struct {
-	ID                int64   `json:"id"`
-	Name              string  `json:"name"`
-	InboundIDs        []int64 `json:"inboundIds"`
-	SubscriptionCount int     `json:"subscriptionCount"`
-	CreatedAt         int64   `json:"createdAt"`
-	UpdatedAt         int64   `json:"updatedAt"`
+	ID                int64              `json:"id"`
+	Name              string             `json:"name"`
+	InboundIDs        []int64            `json:"inboundIds"`
+	Groups            []store.ProxyGroup `json:"groups"`
+	SubscriptionCount int                `json:"subscriptionCount"`
+	CreatedAt         int64              `json:"createdAt"`
+	UpdatedAt         int64              `json:"updatedAt"`
 }
 
 type TemplateRequest struct {
-	Name       string  `json:"name"`
-	InboundIDs []int64 `json:"inboundIds"`
+	Name       string              `json:"name"`
+	InboundIDs []int64             `json:"inboundIds"`
+	Groups     *[]store.ProxyGroup `json:"groups,omitempty"`
 }
 
 // --- service ------------------------------------------------------------------
@@ -114,7 +116,9 @@ func (s *Service) templateView(ctx context.Context, r store.TemplateRow) (Templa
 		return TemplateView{}, err
 	}
 	return TemplateView{
-		ID: r.ID, Name: r.Name, InboundIDs: ids, SubscriptionCount: n,
+		ID: r.ID, Name: r.Name, InboundIDs: ids,
+		Groups: store.EffectiveProxyGroups(r.Groups, ids),
+		SubscriptionCount: n,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}, nil
 }
@@ -140,11 +144,17 @@ func (s *Service) CreateTemplate(ctx context.Context, req TemplateRequest) (Temp
 	if err != nil {
 		return TemplateView{}, err
 	}
-	_, idsJSON, err := s.normalizeInboundIDs(ctx, req.InboundIDs)
+	ids, idsJSON, err := s.normalizeInboundIDs(ctx, req.InboundIDs)
 	if err != nil {
 		return TemplateView{}, err
 	}
-	id, err := s.st.CreateTemplate(ctx, name, idsJSON, nowUnix())
+	groupsJSON := ""
+	if req.Groups != nil {
+		if _, groupsJSON, err = store.ValidateProxyGroups(*req.Groups, ids); err != nil {
+			return TemplateView{}, errValidation(err.Error())
+		}
+	}
+	id, err := s.st.CreateTemplate(ctx, name, idsJSON, groupsJSON, nowUnix())
 	if err != nil {
 		return TemplateView{}, nameConflictErr(err)
 	}
@@ -171,7 +181,13 @@ func (s *Service) UpdateTemplate(ctx context.Context, id int64, req TemplateRequ
 	if err != nil {
 		return TemplateView{}, "", err
 	}
-	if err := s.st.UpdateTemplate(ctx, id, name, idsJSON, nowUnix()); err != nil {
+	groupsJSON := old.Groups
+	if req.Groups != nil {
+		if _, groupsJSON, err = store.ValidateProxyGroups(*req.Groups, ids); err != nil {
+			return TemplateView{}, "", errValidation(err.Error())
+		}
+	}
+	if err := s.st.UpdateTemplate(ctx, id, name, idsJSON, groupsJSON, nowUnix()); err != nil {
 		return TemplateView{}, "", nameConflictErr(err)
 	}
 	var parts []string

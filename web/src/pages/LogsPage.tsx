@@ -11,57 +11,9 @@ import {
   type LogEntry,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-// Segmented mirrors the panel's other segmented controls.
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div className="inline-flex rounded-xl bg-muted p-1">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "h-7 rounded-lg px-3 text-[13px] transition-colors",
-            value === o.value
-              ? "bg-background font-medium shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-const CATEGORIES: { value: LogCategory; label: string }[] = [
-  { value: "core", label: "核心" },
-  { value: "panel", label: "面板操作" },
-  { value: "connection", label: "客户端连接" },
-  { value: "config", label: "配置更改" },
-];
-
-const LEVELS = [
-  { value: "", label: "全部级别" },
-  { value: "INFO", label: "INFO" },
-  { value: "WARN", label: "WARN" },
-  { value: "ERROR", label: "ERROR" },
-];
-
-const RESULTS = [
-  { value: "", label: "全部结果" },
-  { value: "success", label: "成功" },
-  { value: "failed", label: "失败" },
-];
+import { Segmented } from "./logs/Segmented";
+import { CATEGORIES, LEVELS, RESULTS } from "./logs/constants";
+import { LogRow } from "./logs/LogRow";
 
 export default function LogsPage({
   refreshSignal,
@@ -313,147 +265,6 @@ export default function LogsPage({
   // Rows: clock + level/result label + message. The level/result is
   // also shown as a left-border accent (error/failed) or row weight,
   // no badges, no per-row cards.
-  const renderRow = (e: LogEntry, i: number) => {
-    const key = `${e.category}-${e.ts}-${i}`;
-    const time = (
-      <span className="shrink-0 font-normal tabular-nums text-muted-foreground">
-        {formatTs(e.ts)}
-      </span>
-    );
-    if (e.category === "panel") {
-      const failed = e.result === "failed";
-      return (
-        <li
-          key={key}
-          className={cn(
-            "flex gap-2 border-l-2 border-transparent px-4 py-px",
-            failed && "border-foreground font-semibold",
-          )}
-        >
-          {time}
-          <span
-            className={cn(
-              "w-8 shrink-0 tabular-nums",
-              failed ? "text-foreground" : "text-muted-foreground",
-            )}
-          >
-            {failed ? "失败" : "成功"}
-          </span>
-          <span className="min-w-0 flex-1 font-normal whitespace-pre-wrap break-all">
-            {e.action}
-            {e.target ? ` ${e.target}` : ""}
-            {failed && e.detail ? `（${e.detail}）` : ""}
-            {e.ip && (
-              <span className="text-muted-foreground"> [{e.ip}]</span>
-            )}
-            {e.summary && (
-              <span className="text-muted-foreground"> {e.summary}</span>
-            )}
-            {e.applied_hash === "" ? (
-              <span className="text-muted-foreground"> 待同步</span>
-            ) : e.applied_hash ? (
-              <span className="text-muted-foreground">
-                {" "}
-                已应用 {e.applied_hash.slice(0, 8)}
-              </span>
-            ) : null}
-          </span>
-        </li>
-      );
-    }
-    if (e.category === "config") {
-      // One row is one field-level change a sync made from the file:
-      // action label + item + old→new + the reason, muted. Illegal
-      // drops get the same accent as a failed panel row.
-      const dropped = e.action === "非法丢弃";
-      return (
-        <li
-          key={key}
-          className={cn(
-            "flex gap-2 border-l-2 border-transparent px-4 py-px",
-            dropped && "border-foreground font-semibold",
-          )}
-        >
-          {time}
-          <span
-            className={cn(
-              "w-16 shrink-0 tabular-nums",
-              dropped ? "text-foreground" : "text-muted-foreground",
-            )}
-          >
-            {e.action}
-          </span>
-          <span className="min-w-0 flex-1 font-normal whitespace-pre-wrap break-all">
-            {e.target}
-            {e.summary && (
-              <span className="text-muted-foreground"> {e.summary}</span>
-            )}
-            {e.detail && (
-              <span className="text-muted-foreground">（{e.detail}）</span>
-            )}
-          </span>
-        </li>
-      );
-    }
-    if (e.category === "connection") {
-      // One row is one connection: origin IP -> destination, plus the
-      // subscription and node it used. A part stays blank when that
-      // line fell outside the journal window.
-      const main = [e.source, e.destination]
-        .filter(Boolean)
-        .join(" → ");
-      const sub = [
-        e.user ? `订阅 ${e.user}` : "",
-        e.tag ? `节点 ${e.tag}` : "",
-      ]
-        .filter(Boolean)
-        .join(" · ");
-      return (
-        <li
-          key={key}
-          className="flex gap-2 border-l-2 border-transparent px-4 py-px"
-        >
-          {time}
-          <span className="min-w-0 flex-1 font-normal whitespace-pre-wrap break-all">
-            {main || e.message || "—"}
-            {sub && (
-              <span className="text-muted-foreground"> {sub}</span>
-            )}
-          </span>
-        </li>
-      );
-    }
-    const accent =
-      e.level === "ERROR" || e.level === "FATAL"
-        ? "border-foreground font-semibold"
-        : e.level === "WARN"
-          ? "font-medium"
-          : "";
-    return (
-      <li
-        key={key}
-        className={cn(
-          "flex gap-2 border-l-2 border-transparent px-4 py-px",
-          accent,
-        )}
-      >
-        {time}
-        <span
-          className={cn(
-            "w-12 shrink-0 tabular-nums",
-            e.level === "ERROR" || e.level === "FATAL"
-              ? "text-foreground"
-              : "text-muted-foreground",
-          )}
-        >
-          {e.level}
-        </span>
-        <span className="min-w-0 flex-1 font-normal whitespace-pre-wrap break-all">
-          {e.message}
-        </span>
-      </li>
-    );
-  };
 
   return (
     <div className="space-y-4">
@@ -523,14 +334,13 @@ export default function LogsPage({
         </Button>
       </div>
       <p className="text-xs text-muted-foreground">
-        核心与客户端连接来自 sing-box 运行日志；面板操作记录所有面板变更与结果，保留
-        90 天；配置更改记录每次同步时文件对面板的改动、透传与丢弃。
+        核心与客户端连接来自 sing-box 运行日志；面板操作记录所有面板变更与结果，保留 90 天。
       </p>
       {/* One big container for the logs, old-panel style: monospace,
       dense lines, scrollable. Lines stay selectable: copying IPs and
       domains is the point. */}
       <div className="relative">
-        <div className="rounded-xl border bg-card text-card-foreground shadow-sm">
+        <div className="rounded-[18px] border bg-card text-card-foreground shadow-sm">
           <div
             ref={containerRef}
             tabIndex={0}
@@ -560,7 +370,9 @@ export default function LogsPage({
               )
             ) : (
               // Refreshes swap rows in place; the list never blanks.
-              <ul>{entries.map(renderRow)}</ul>
+              <ul>{entries.map((e, i) => (
+              <LogRow key={`${e.category}-${e.ts}-${i}`} e={e} formatTs={formatTs} />
+            ))}</ul>
             )}
           </div>
         </div>

@@ -134,10 +134,6 @@ func singboxOutbound(n Node, cfg settings.View) map[string]any {
 			"enabled": true, "server_name": n.SNI, "alpn": []string{"h3"},
 			"insecure": cfg.SkipCertVerify,
 		}
-	case "shadowsocks":
-		base["type"] = "shadowsocks"
-		base["method"] = n.Method
-		base["password"] = n.Password
 	case "anytls":
 		base["type"] = "anytls"
 		base["password"] = n.Password

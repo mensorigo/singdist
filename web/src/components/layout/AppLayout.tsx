@@ -15,7 +15,6 @@ import {
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
-import SyncControl from "@/components/sync-control";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { Theme } from "@/lib/theme";
@@ -24,6 +23,7 @@ export type RouteKey =
   | "dashboard"
   | "subscriptions"
   | "inbounds"
+  | "nodes"
   | "certificates"
   | "settings"
   | "security"
@@ -33,16 +33,19 @@ export const ROUTES: { key: RouteKey; path: string; label: string }[] = [
   { key: "dashboard", path: "/dashboard", label: "仪表盘" },
   { key: "subscriptions", path: "/subscriptions", label: "订阅管理" },
   { key: "inbounds", path: "/inbounds", label: "入站" },
+  { key: "nodes", path: "/nodes", label: "节点" },
   { key: "certificates", path: "/certificates", label: "证书管理" },
   { key: "security", path: "/security", label: "安全和隐私" },
-  { key: "settings", path: "/settings", label: "设置" },
   { key: "logs", path: "/logs", label: "日志" },
+  // 设置放在侧边栏最下面（退出登录上方）。
+  { key: "settings", path: "/settings", label: "设置" },
 ];
 
 const NAV_ICONS: Record<RouteKey, ReactNode> = {
   dashboard: <LayoutGrid className="h-[18px] w-[18px] shrink-0" />,
   subscriptions: <Users className="h-[18px] w-[18px] shrink-0" />,
   inbounds: <Server className="h-[18px] w-[18px] shrink-0" />,
+  nodes: <Share2 className="h-[18px] w-[18px] shrink-0" />,
   certificates: <ShieldCheck className="h-[18px] w-[18px] shrink-0" />,
   settings: <SettingsIcon className="h-[18px] w-[18px] shrink-0" />,
   security: <Lock className="h-[18px] w-[18px] shrink-0" />,
@@ -70,8 +73,6 @@ interface Props {
   onToggleTheme: () => void;
   onLogout: () => void;
   onRefresh: () => void;
-  syncRefreshSignal: number;
-  onSynced: () => void;
   textSelectable: boolean;
   children: ReactNode;
 }
@@ -84,8 +85,6 @@ export default function AppLayout({
   onToggleTheme,
   onLogout,
   onRefresh,
-  syncRefreshSignal,
-  onSynced,
   textSelectable,
   children,
 }: Props) {
@@ -269,17 +268,6 @@ export default function AppLayout({
             </span>
 
             <div className="ml-auto flex items-center gap-1.5">
-              {/* Temporarily hidden 2026-10-25: the top-bar sync control
-                  is hidden; auto-sync is configured on the Settings
-                  page. The component stays mounted so its 30s status
-                  poll still refreshes pages when auto-sync imports
-                  file changes; remove this wrapper to restore it. */}
-              <div className="hidden">
-                <SyncControl
-                  refreshSignal={syncRefreshSignal}
-                  onSynced={onSynced}
-                />
-              </div>
               <Button
                 variant="ghost"
                 size="icon"

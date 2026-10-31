@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,62 +22,16 @@ import (
 	"singbox-ui/server/internal/dash"
 	"singbox-ui/server/internal/httpx"
 	"singbox-ui/server/internal/inbounds"
+	"singbox-ui/server/internal/localmachine"
 	"singbox-ui/server/internal/logs"
+	"singbox-ui/server/internal/nodes"
 	"singbox-ui/server/internal/render"
 	"singbox-ui/server/internal/settings"
 	"singbox-ui/server/internal/store"
 	"singbox-ui/server/internal/subs"
 	"singbox-ui/server/internal/templates"
+	"singbox-ui/server/internal/traffic"
 )
-
-type config struct {
-	dataDir       string
-	addr          string
-	coreKind      string
-	clashAPI      string
-	clashKey      string
-	tlsCert       string
-	tlsKey        string
-	singboxConfig string
-	singboxBin    string
-	syncConfig    string
-	coreUnit      string
-	autoSyncMin   int
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
-}
-
-func envInt(key string, fallback int) int {
-	if v := os.Getenv(key); v != "" {
-		var n int
-		if _, err := fmt.Sscanf(v, "%d", &n); err == nil && n >= 0 {
-			return n
-		}
-	}
-	return fallback
-}
-
-func loadConfig() config {
-	return config{
-		dataDir:       envOr("SINGBOX_UI_DATA_DIR", "./data"),
-		addr:          envOr("SINGBOX_UI_ADDR", ":8443"),
-		coreKind:      envOr("SINGBOX_UI_CORE", "clash"),
-		clashAPI:      envOr("SINGBOX_UI_CLASH_API", "http://127.0.0.1:9090"),
-		clashKey:      os.Getenv("SINGBOX_UI_CLASH_SECRET"),
-		tlsCert:       os.Getenv("SINGBOX_UI_TLS_CERT"),
-		tlsKey:        os.Getenv("SINGBOX_UI_TLS_KEY"),
-		singboxConfig: envOr("SINGBOX_UI_SINGBOX_CONFIG", "/etc/sing-box/config.json"),
-		singboxBin:    envOr("SINGBOX_UI_SINGBOX_BIN", "/usr/bin/sing-box"),
-		syncConfig:    os.Getenv("SINGBOX_UI_SYNC_CONFIG"),
-		coreUnit:      os.Getenv("SINGBOX_UI_CORE_UNIT"),
-		autoSyncMin:   envInt("SINGBOX_UI_AUTO_SYNC_MINUTES", 0),
-	}
-}
 
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
@@ -202,87 +157,178 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	})
 	syncHandler := coresync.NewHandler(syncSvc)
 
-	// --- auto-sync checker (settings-driven) ---------------------------
-	// Wakes every 10s and syncs only when due, so interval and on/off
-	// changes apply without a restart:
-	//   - switch off: skip entirely;
-	//   - interval 0: sync once changes have been quiet for a few seconds
-	//     (debounce: a burst of edits becomes one sync, not one restart
-	//     per edit), or immediately when the drift came from the file
-	//     side (no pending panel rows to debounce on);
-	//   - interval > 0: sync once the last sync row is older than the
-	//     interval — so re-enabling after a long-off period picks
-	//     pending changes up within one check.
-	// The checker only acts when the desired config differs from the
-	// target, so idle checks change nothing and leave no log rows.
-	// Manual sync stays available and is serialized by the same mutex.
-	// SINGBOX_UI_AUTO_SYNC_MINUTES survives only as the legacy fallback
-	// inside settings.GetAutoSync (fresh DBs / the scenario harness).
-	slog.Info("auto-sync checker started", "checkInterval", "10s")
+	// --- remote nodes (central push) -------------------------------------
+	// The poller keeps agent nodes converged (desired-hash comparison +
+	// 30s status probes); manual push-now and clear-block go through the
+	// same pusher. No business-handler changes are needed for auto-push:
+	// any panel change alters the desired hash, which the poller picks
+	// up on its next tick.
+	nodesPusher := nodes.NewPusher(st, certMgr, log, filepath.Join(cfg.dataDir, "logs"))
+	nodesSvc := nodes.NewService(st, nodesPusher)
+	nodesHandler := nodes.NewHandler(nodesSvc)
+	go nodesPusher.Start(ctx)
+
+	// Local traffic collector: same Clash+log matching as the
+	// node agent, for the local core. Totals persist to a JSON
+	// file in the data dir, not a new table.
+	localTraffic := traffic.New(cfg.clashAPI, st, filepath.Join(cfg.dataDir, "traffic.json"))
+	go localTraffic.Run(ctx)
+	trafficSummary := traffic.NewSummaryService(st, nodesSvc, localTraffic)
+	trafficHandler := traffic.NewHandler(trafficSummary)
+	// Usage sync: every 30s, write the collector's per-subscription
+	// totals into the subscriptions table. Without this the
+	// subscription page and the client userinfo header read
+	// used_up/used_down, which nothing else ever writes, so they
+	// stay zero no matter how much traffic flows.
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
-		for range ticker.C {
-			ctx := context.Background()
-			enabled, interval, err := settingsSvc.GetAutoSync(ctx, cfg.autoSyncMin)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if _, err := trafficSummary.SyncUsage(ctx); err != nil {
+					slog.Warn("traffic usage sync failed", "error", err)
+				}
+			}
+		}
+	}()
+
+	// --- auto-sync: debouncer + drift poll ---------------------------
+	// Two pieces, one decision point (the debouncer):
+	//   - The debouncer decides WHEN to push: 5s quiet after the
+	//     last change, or 30s after the first unpushed change,
+	//     whichever comes first. Timer-based, not a 10s tick: a
+	//     tick would cut the 5s window into 5-15s.
+	//   - The drift poll (5s) discovers FILE-side changes the panel
+	//     cannot be told about: it compares Status().DesiredHash
+	//     with the last hash it pushed for; a changed hash marks
+	//     dirty. Panel-side changes mark dirty directly via the
+	//     audit middleware hook, so a panel edit pushes within the
+	//     debounce window instead of waiting for the next poll.
+	// The run closure checks the enabled switch fresh each run
+	// (GetAutoSync; the interval value is IGNORED this round — the
+	// debouncer's 5s/30s replace the old interval timing; the
+	// settings rows are kept, not deleted or migrated). Disabled
+	// clears dirty; the poll re-discovers on re-enable. A busy run
+	// (sync already running) keeps dirty and retries soon; an
+	// InSync or input-blocked run is a noop that clears dirty.
+	// SINGBOX_UI_AUTO_SYNC_MINUTES survives only as the legacy
+	// fallback inside settings.GetAutoSync (fresh DBs / the
+	// scenario harness).
+	debouncer := coresync.NewDebouncer(func() coresync.RunOutcome {
+		pctx := context.Background()
+		enabled, _, err := settingsSvc.GetAutoSync(pctx, cfg.autoSyncMin)
+		if err != nil {
+			slog.Warn("auto-sync settings read failed", "error", err)
+			return coresync.RunDone // do not spin on a settings error
+		}
+		if !enabled {
+			return coresync.RunDone
+		}
+		row, ran, err := syncSvc.AutoSync(pctx)
+		switch {
+		case err != nil:
+			slog.Warn("auto-sync failed", "error", err)
+			return coresync.RunDone
+		case row.Result == "skipped":
+			// Busy: another sync holds the lock. Keep dirty,
+			// retry soon (do NOT queue).
+			return coresync.RunBusy
+		case !ran:
+			// InSync noop, or input blocked after a rollback:
+			// nothing to push.
+			return coresync.RunDone
+		default:
+			slog.Info("auto-sync applied", "result", row.Result, "hash", row.Hash)
+			// The debouncer bypasses HTTP, so the audit
+			// middleware never sees it — record it explicitly,
+			// or the Logs page timeline would have a hole where
+			// the core actually changed.
+			result, detail := "success", ""
+			if row.Result != "applied" && row.Result != "no_change" {
+				result = "failed"
+				detail = row.Detail
+				if detail == "" {
+					detail = row.Result
+				}
+			}
+			target := row.Hash
+			if len(target) > 8 {
+				target = target[:8]
+			}
+			logs.RecordAudit(context.Background(), st, log, filepath.Join(cfg.dataDir, "logs"), store.AuditRow{
+				At:     time.Now().Unix(),
+				Action: "自动同步",
+				Target: target,
+				Result: result,
+				Detail: detail,
+			})
+			return coresync.RunDone
+		}
+	})
+	go debouncer.Start(ctx)
+	slog.Info("auto-sync debouncer started", "quiet", "5s", "cap", "30s", "driftPoll", "5s")
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		var lastSeen string
+		var lastFileHash string
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+			pctx := context.Background()
+			enabled, _, err := settingsSvc.GetAutoSync(pctx, cfg.autoSyncMin)
 			if err != nil {
-				slog.Warn("auto-sync settings read failed", "error", err)
+				slog.Warn("auto-sync drift poll settings read failed", "error", err)
 				continue
 			}
 			if !enabled {
+				// Reset: re-enable must re-discover the drift
+				// instead of treating it as already seen.
+				lastSeen = ""
+				lastFileHash = ""
 				continue
 			}
-			status, err := syncSvc.Status(ctx)
+			// Cheap pre-check: the poll only discovers FILE-side changes
+			// (panel changes notify via the audit hook), so if the file
+			// bytes are unchanged since the last poll there is no file
+			// drift to discover — skip the full Status() (which
+			// regenerates + classifies + merges). A failed read is
+			// treated as changed (Status handles missing/unreadable).
+			if fb, ferr := os.ReadFile(syncTarget); ferr == nil {
+				fh := fmt.Sprintf("%x", sha256.Sum256(fb))
+				if fh == lastFileHash {
+					continue
+				}
+				lastFileHash = fh
+			} else {
+				lastFileHash = ""
+			}
+			status, err := syncSvc.Status(pctx)
 			if err != nil {
-				slog.Warn("auto-sync check failed", "error", err)
+				slog.Warn("auto-sync drift poll failed", "error", err)
 				continue
 			}
 			if status.InSync {
+				lastSeen = status.DesiredHash
+				// Converged with a stale input block (operator
+				// fixed the file by hand): trigger one run so
+				// AutoSync clears the block. The run is a noop
+				// otherwise, and the next poll sees an empty
+				// block, so this fires at most once per block.
+				if baseline, berr := st.GetSyncState(pctx); berr == nil && baseline.BlockedHash != "" {
+					debouncer.Notify()
+				}
 				continue
 			}
-			if interval == 0 {
-				lastChange, err := st.LatestPendingAuditAt(ctx)
-				if err == nil && lastChange > 0 && time.Now().Unix()-lastChange < 5 {
-					continue // changes still landing; wait for quiet
-				}
-			} else {
-				var lastSync int64
-				if status.Last != nil {
-					lastSync = status.Last.At
-				}
-				if time.Now().Unix()-lastSync < int64(interval) {
-					continue
-				}
-			}
-			row, ran, err := syncSvc.AutoSync(ctx)
-			switch {
-			case err != nil:
-				slog.Warn("auto-sync check failed", "error", err)
-			case ran:
-				slog.Info("auto-sync applied", "result", row.Result, "hash", row.Hash)
-				// The ticker bypasses HTTP, so the audit
-				// middleware never sees it — record it
-				// explicitly, or the Logs page timeline would
-				// have a hole where the core actually changed.
-				result, detail := "success", ""
-				if row.Result != "applied" && row.Result != "no_change" {
-					result = "failed"
-					detail = row.Detail
-					if detail == "" {
-						detail = row.Result
-					}
-				}
-				target := row.Hash
-				if len(target) > 8 {
-					target = target[:8]
-				}
-				logs.RecordAudit(context.Background(), st, log, filepath.Join(cfg.dataDir, "logs"), store.AuditRow{
-					At:     time.Now().Unix(),
-					Action: "自动同步",
-					Target: target,
-					Result: result,
-					Detail: detail,
-				})
+			if status.DesiredHash != lastSeen {
+				lastSeen = status.DesiredHash
+				debouncer.Notify()
 			}
 		}
 	}()
@@ -291,9 +337,12 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	engine := httpx.NewEngine(log)
 	// Audit middleware first: it records every mutating /api call
 	// (reads excluded) for the Logs page, regardless of route group.
-	engine.Use(logs.AuditMiddleware(st, log, filepath.Join(cfg.dataDir, "logs")))
+	// Its notify hook marks the debouncer dirty on every successful
+	// panel change.
+	engine.Use(logs.AuditMiddleware(st, log, filepath.Join(cfg.dataDir, "logs"), debouncer.Notify))
 	authHandler := auth.NewHandler(authSvc)
 	dashHandler := dash.NewHandler(sampler)
+	localHandler := localmachine.NewHandler(cfg.addr)
 	logsSvc := logs.NewService(st, filepath.Join(cfg.dataDir, "logs", "sing-box.log"), log)
 	// Log following: the panel-managed core log file is ingested into
 	// core_logs, so the Logs page serves indexed SELECTs.
@@ -307,6 +356,7 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	protected.Use(httpx.AuthGuard(authSvc, auth.CookieName))
 	authHandler.RegisterProtected(protected)
 	dashHandler.RegisterProtected(protected)
+	localHandler.RegisterProtected(protected)
 	certHandler.RegisterProtected(protected)
 	inboundHandler.RegisterProtected(protected)
 	subsHandler.RegisterProtected(protected)
@@ -314,7 +364,9 @@ func run(ctx context.Context, log *slog.Logger, cfg config) error {
 	settingsHandler.RegisterProtected(protected)
 	renderHandler.RegisterProtected(protected)
 	syncHandler.RegisterProtected(protected)
+	nodesHandler.RegisterProtected(protected)
 	logsHandler.RegisterProtected(protected)
+	trafficHandler.RegisterProtected(protected)
 
 	subPublic := engine.Group("")
 	renderHandler.RegisterPublic(subPublic)

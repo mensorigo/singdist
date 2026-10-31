@@ -44,6 +44,8 @@ var actionLabels = map[string]string{
 	"PATCH /api/certs/:id/note":               "修改证书备注",
 	"DELETE /api/certs/:id":                   "删除证书",
 	"PATCH /api/settings":                     "修改设置",
+	"PATCH /api/nodes/:id":                    "修改节点",
+	"DELETE /api/nodes/:id":                   "删除节点",
 	"POST /api/sync":                          "同步到核心",
 	"GET /api/subscriptions/:id/preview":      "预览订阅",
 }
@@ -100,8 +102,13 @@ func (w *captureWriter) Write(b []byte) (int, error) {
 // would flood the table. Recording is best-effort and never fails the
 // request itself. When fileDir is non-empty, each row is also appended
 // to fileDir/audit.log (a single file) so panel operations survive as
-// a plain-text file, not only as database rows.
-func AuditMiddleware(st *store.Store, log *slog.Logger, fileDir string) gin.HandlerFunc {
+// a plain-text file, not only as database rows. Optional notify
+// callbacks fire AFTER the row is recorded, only for a SUCCESSFUL
+// mutating call: the sync endpoint itself never notifies (the
+// debouncer's run decides via Status anyway, and a post-sync fire
+// would only re-arm the timer pointlessly), failed calls changed
+// nothing, and the preview GET is a read, not a change.
+func AuditMiddleware(st *store.Store, log *slog.Logger, fileDir string, notify ...func()) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		method := c.Request.Method
 		key := method + " " + c.FullPath()
@@ -204,6 +211,14 @@ func AuditMiddleware(st *store.Store, log *slog.Logger, fileDir string) gin.Hand
 			Summary:     summary,
 		}
 		RecordAudit(c.Request.Context(), st, log, fileDir, row)
+		// Panel change landed: tell the debouncer (if one is
+		// wired). Over-notifying is harmless — the debouncer's
+		// run re-checks Status and noops when in sync.
+		if result == "success" && key != "POST /api/sync" && method != http.MethodGet {
+			for _, fn := range notify {
+				fn()
+			}
+		}
 	}
 }
 

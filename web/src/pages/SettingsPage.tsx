@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { ArrowDownUp, Globe, Share2, Shield, Type } from "lucide-react";
+import { Globe, Share2, Shield, Type } from "lucide-react";
 import { toast } from "sonner";
 
 import { EnabledSwitch } from "@/components/enabled-switch";
@@ -16,71 +16,10 @@ import {
   ApiError,
   type SettingsUpdate,
   type SettingsView,
-  type SyncStatus,
 } from "@/lib/api";
-import { cn } from "@/lib/utils";
-
-// Segmented mirrors the panel's other segmented controls
-// (dashboard range tabs, inbounds/templates switch).
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (v: T) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="inline-flex rounded-xl bg-muted p-1">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange(o.value)}
-          className={cn(
-            "h-7 rounded-lg px-3 text-[13px] transition-colors disabled:opacity-50",
-            value === o.value
-              ? "bg-background font-medium shadow-sm"
-              : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function SettingCard({
-  icon,
-  title,
-  desc,
-  children,
-}: {
-  icon: React.ReactNode;
-  title: string;
-  desc?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
-      <div className="flex items-center gap-2.5">
-        <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted text-muted-foreground">
-          {icon}
-        </span>
-        <p className="text-base font-semibold">{title}</p>
-      </div>
-      {desc && (
-        <p className="mt-2 text-[13px] text-muted-foreground">{desc}</p>
-      )}
-      <div className="mt-5">{children}</div>
-    </section>
-  );
-}
+import { Segmented } from "./settings/Segmented";
+import { SettingCard } from "./settings/SettingCard";
+import { Row } from "./settings/Row";
 
 // Curated IANA zones for the panel timezone dropdown. The stored value
 // is always offered as well, so a zone set elsewhere never renders blank.
@@ -109,36 +48,6 @@ const TIMEZONE_OPTIONS: { value: string; label: string }[] = [
   { value: "UTC", label: "协调世界时 (UTC)" },
 ];
 
-// Row: label on the left, control on the right, hairline between rows.
-function Row({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-wrap items-center gap-x-6 gap-y-2 py-3.5 first:pt-0 last:pb-0">
-      <div className="w-40 shrink-0">
-        <p className="text-sm">{label}</p>
-        {hint && (
-          <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>
-        )}
-      </div>
-      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function fmtSyncTime(unix: number): string {
-  if (!unix) return "—";
-  return new Date(unix * 1000).toLocaleString("zh-CN", { hour12: false });
-}
-
 export default function SettingsPage({
   refreshSignal,
 }: {
@@ -150,12 +59,9 @@ export default function SettingsPage({
 
   // Drafts for the text/number fields; committed on blur, resynced
   // whenever the saved settings change (including revert-on-error).
-  const [nodeNameDraft, setNodeNameDraft] = useState("");
   const [publicHostDraft, setPublicHostDraft] = useState("");
   const [intervalDraft, setIntervalDraft] = useState("24");
   const [dashDraft, setDashDraft] = useState("3");
-  const [syncIntervalDraft, setSyncIntervalDraft] = useState("600");
-  const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -177,33 +83,11 @@ export default function SettingsPage({
 
   useEffect(() => {
     if (settings) {
-      setNodeNameDraft(settings.nodeName);
       setPublicHostDraft(settings.publicHost);
       setIntervalDraft(String(settings.updateIntervalHours));
       setDashDraft(String(settings.dashIntervalSecs));
-      setSyncIntervalDraft(String(settings.autoSyncIntervalSecs));
     }
   }, [settings]);
-
-  // Sync status for the 同步 card: the same 30s poll the top-bar
-  // control used, so the card's "last sync" line tracks auto-sync ticks.
-  useEffect(() => {
-    let cancelled = false;
-    const loadSyncStatus = async () => {
-      try {
-        const s = await api.sync.status();
-        if (!cancelled) setSyncStatus(s);
-      } catch {
-        /* status line keeps its previous value */
-      }
-    };
-    void loadSyncStatus();
-    const timer = setInterval(loadSyncStatus, 30_000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [refreshSignal]);
 
   // Instant save: apply optimistically, persist, revert on failure.
   const apply = (patch: SettingsUpdate) => {
@@ -256,18 +140,6 @@ export default function SettingsPage({
     }
     if (n !== settings.dashIntervalSecs) {
       apply({ dashIntervalSecs: n });
-    }
-  };
-
-  const commitSyncInterval = () => {
-    const n = Number(syncIntervalDraft);
-    if (!Number.isInteger(n) || n < 0 || n > 3600) {
-      toast.error("同步间隔需为 0–3600 的整数（秒）");
-      setSyncIntervalDraft(String(settings.autoSyncIntervalSecs));
-      return;
-    }
-    if (n !== settings.autoSyncIntervalSecs) {
-      apply({ autoSyncIntervalSecs: n });
     }
   };
 
@@ -330,19 +202,6 @@ export default function SettingsPage({
         desc="生成订阅内容时使用的全局选项。"
       >
         <div className="divide-y">
-          <Row label="节点名前缀" hint="生成节点名的前缀">
-            <Input
-              value={nodeNameDraft}
-              disabled={saving}
-              onChange={(e) => setNodeNameDraft(e.target.value)}
-              onBlur={() => {
-                const v = nodeNameDraft.trim();
-                if (v !== settings.nodeName) apply({ nodeName: v });
-              }}
-              placeholder="留空则用入站名"
-              className="max-w-xs"
-            />
-          </Row>
           <Row label="默认格式">
             <Segmented
               value={settings.linkFormat}
@@ -354,7 +213,7 @@ export default function SettingsPage({
               ]}
             />
           </Row>
-          <Row label="对外地址" hint="客户端连接的服务器地址">
+          <Row label="本机对外地址" hint="只对本机节点生效：本机节点在订阅里的服务器地址，节点用自己的对外地址">
             <Input
               value={publicHostDraft}
               disabled={saving}
@@ -475,48 +334,6 @@ export default function SettingsPage({
         </div>
       </SettingCard>
       </div>
-
-      <SettingCard
-        icon={<ArrowDownUp className="h-[18px] w-[18px]" />}
-        title="同步"
-        desc="核心配置的自动同步；顶栏同步按钮已隐藏，同步全部由这里控制。"
-      >
-        <>
-          <div className="divide-y">
-            <Row label="自动同步核心" hint="关闭后不再自动同步">
-              <EnabledSwitch
-                enabled={settings.autoSyncEnabled}
-                disabled={saving}
-                onToggle={() =>
-                  apply({ autoSyncEnabled: !settings.autoSyncEnabled })
-                }
-              />
-            </Row>
-            <Row label="同步间隔" hint="0 = 每次修改后自动同步；大于 0 = 到期自动同步">
-              <div className="flex items-center gap-2">
-                <Input
-                  type="number"
-                  min={0}
-                  max={3600}
-                  value={syncIntervalDraft}
-                  disabled={saving || !settings.autoSyncEnabled}
-                  onChange={(e) => setSyncIntervalDraft(e.target.value)}
-                  onBlur={commitSyncInterval}
-                  className="w-24"
-                />
-                <span className="text-sm text-muted-foreground">秒</span>
-              </div>
-            </Row>
-          </div>
-          <p className="mt-4 text-xs text-muted-foreground">
-            {syncStatus === null
-              ? "同步状态加载中…"
-              : syncStatus.inSync
-                ? `已同步${syncStatus.last ? ` · 上次同步 ${fmtSyncTime(syncStatus.last.at)}` : " · 尚未同步过"}`
-                : `有变更待同步${syncStatus.last ? ` · 上次同步 ${fmtSyncTime(syncStatus.last.at)}` : " · 尚未同步过"}`}
-          </p>
-        </>
-      </SettingCard>
 
       <p className="text-xs text-muted-foreground">
         这些选项保存后即时生效。

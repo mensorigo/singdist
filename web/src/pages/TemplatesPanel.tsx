@@ -1,32 +1,17 @@
 import { useCallback, useEffect, useState } from "react";
+import { Pencil, Trash } from "lucide-react";
 import { toast } from "sonner";
 
 import { ConfirmDialog } from "@/components/confirm-dialog";
+import { TemplateFormDialog } from "./templates/TemplateFormDialog";
+import { ICON_BTN_CLS } from "./templates/shared";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   api,
   ApiError,
   type InboundView,
   type TemplateView,
 } from "@/lib/api";
-
-const PROTOCOL_LABEL: Record<string, string> = {
-  "vless-reality": "VLESS · Reality",
-  hysteria2: "Hysteria2",
-  tuic: "TUIC v5",
-  shadowsocks: "Shadowsocks",
-  anytls: "AnyTLS",
-  trojan: "Trojan",
-};
 
 // TemplatesPanel is the templates view inside the Inbounds page: a
 // template is a named set of inbounds, so it is managed next to the
@@ -84,7 +69,7 @@ export default function TemplatesPanel({
   };
 
   return (
-    <section className="rounded-xl border bg-card px-6 py-6 text-card-foreground shadow-sm">
+    <section className="rounded-[18px] border bg-card px-6 py-6 text-card-foreground shadow-sm">
       <div className="flex items-center justify-between">
         <p className="text-base font-semibold">模板（入站集合）</p>
         <Button
@@ -130,20 +115,25 @@ export default function TemplatesPanel({
                   {t.subscriptionCount}
                 </td>
                 <td className="py-2.5">
-                  <div className="flex items-center gap-3">
-                    <Button
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      title="编辑"
+                      aria-label="编辑"
                       onClick={() => setTplDialog(t)}
-                      className="h-8 rounded-xl px-3"
+                      className={ICON_BTN_CLS}
                     >
-                      编辑
-                    </Button>
-                    <Button
-                      variant="destructive"
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      title="删除"
+                      aria-label="删除"
                       onClick={() => setPendingDelete(t)}
-                      className="h-8 rounded-xl px-3"
+                      className={`${ICON_BTN_CLS}`}
                     >
-                      删除
-                    </Button>
+                      <Trash className="h-4 w-4" />
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -209,120 +199,3 @@ export default function TemplatesPanel({
   );
 }
 
-// --- template form --------------------------------------------------------------
-
-function TemplateFormDialog({
-  item,
-  inbounds,
-  onClose,
-  onSaved,
-}: {
-  item: TemplateView | null;
-  inbounds: InboundView[];
-  onClose: () => void;
-  onSaved: () => Promise<void>;
-}) {
-  const creating = item === null;
-  const [name, setName] = useState(item?.name ?? "");
-  const [selected, setSelected] = useState<number[]>(item?.inboundIds ?? []);
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-
-  const toggle = (id: number) =>
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-    setSubmitting(true);
-    try {
-      const body = { name: name.trim(), inboundIds: selected };
-      if (creating) {
-        await api.templates.create(body);
-        toast.success("模板已创建");
-      } else {
-        await api.templates.update(item.id, body);
-        toast.success("模板已保存");
-      }
-      await onSaved();
-    } catch (err) {
-      setFormError(err instanceof ApiError ? err.message : "保存失败，请重试");
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open) onClose();
-      }}
-    >
-      <DialogContent className="max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{creating ? "新建模板" : "编辑模板"}</DialogTitle>
-        </DialogHeader>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="tpl-name">名称</Label>
-            <Input
-              id="tpl-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="例如：全部节点"
-              required
-            />
-          </div>
-          <div className="space-y-2">
-            <Label>包含的入站</Label>
-            <div className="space-y-1.5">
-              {inbounds.map((ib) => (
-                <label
-                  key={ib.id}
-                  className="flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2 text-sm transition-colors hover:bg-muted/50"
-                >
-                  <input
-                    type="checkbox"
-                    checked={selected.includes(ib.id)}
-                    onChange={() => toggle(ib.id)}
-                    className="h-4 w-4 accent-primary"
-                  />
-                  <span className="font-medium">{ib.name}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {PROTOCOL_LABEL[ib.protocol] ?? ib.protocol} · 端口{" "}
-                    {ib.port}
-                    {!ib.enabled && " · 已停用"}
-                  </span>
-                </label>
-              ))}
-              {inbounds.length === 0 && (
-                <p className="text-sm text-muted-foreground">
-                  暂无入站，请先在「入站」视图创建
-                </p>
-              )}
-            </div>
-          </div>
-          {formError && (
-            <p className="text-[13px] text-destructive">{formError}</p>
-          )}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={onClose}
-              disabled={submitting}
-            >
-              取消
-            </Button>
-            <Button type="submit" disabled={submitting}>
-              {submitting ? "保存中…" : creating ? "创建" : "保存"}
-            </Button>
-          </DialogFooter>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}

@@ -180,11 +180,87 @@ func (s *Store) CoreLogsUsedBytes(ctx context.Context) (int64, error) {
 	return used, nil
 }
 
+// ConnectionRecord is one grouped core connection log row, with
+// its log timestamp (unix ms). The traffic collector matches a
+// Clash connection to the record whose timestamp is closest to
+// the Clash connection's start time, so a reused source port is
+// not attributed to a later/earlier connection from the same
+// source address.
+type ConnectionRecord struct {
+	Source string
+	Tag    string
+	User   string
+	Ts     int64
+}
+
+// RecentConnectionRecords returns every grouped connection row at
+// or after sinceMs, oldest first.
+func (s *Store) RecentConnectionRecords(ctx context.Context, sinceMs int64) ([]ConnectionRecord, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT source, tag, user, ts FROM core_logs WHERE kind = 'connection' AND ts >= ? ORDER BY ts ASC`, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ConnectionRecord{}
+	for rows.Next() {
+		var r ConnectionRecord
+		if err := rows.Scan(&r.Source, &r.Tag, &r.User, &r.Ts); err != nil {
+			return nil, err
+		}
+		if r.Source == "" || r.Tag == "" {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// RecentConnections returns, per client source address (IP:port),
+// the latest connection record at or after sinceMs: inbound tag
+// and core username. The traffic collector matches Clash
+// connections to these records by source address.
+func (s *Store) RecentConnections(ctx context.Context, sinceMs int64) (map[string]struct {
+	Tag  string
+	User string
+}, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT source, tag, user, ts FROM core_logs WHERE kind = 'connection' AND ts >= ? ORDER BY ts DESC`, sinceMs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]struct {
+		Tag  string
+		User string
+	}{}
+	for rows.Next() {
+		var source, tag, user string
+		var ts int64
+		if err := rows.Scan(&source, &tag, &user, &ts); err != nil {
+			return nil, err
+		}
+		if source == "" || tag == "" {
+			continue
+		}
+		if _, ok := out[source]; !ok {
+			out[source] = struct {
+				Tag  string
+				User string
+			}{Tag: tag, User: user}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OnlineIPs returns, per log user name, the set of distinct source IPs
 // with a connection record at or after sinceMs. Source is "ip:port"
 // (Go Addr.String form, so IPv6 arrives bracketed); the port is
 // stripped, and an unparseable source counts as-is rather than being
-// dropped. Rows with an empty user (e.g. shadowsocks, which has no
+// dropped. Rows with an empty user (e.g. protocols with no
 // per-user field) cannot be attributed and are skipped.
 func (s *Store) OnlineIPs(ctx context.Context, sinceMs int64) (map[string]map[string]struct{}, error) {
 	rows, err := s.db.QueryContext(ctx,

@@ -1,15 +1,16 @@
 // Package subs owns subscription records: a subscription binds one
 // template (owned by internal/templates) and is the unit of
-// distribution and governance (one link = one core user). Rendering
-// and serving subscription content is a separate later phase; nothing
-// here touches the core.
+// distribution and governance (one link = one client identity).
+// Password protocols get one core user per (subscription, inbound)
+// in coresync generation, so online-IP attribution must sum those
+// renamed names too; rendering and serving subscription content is
+// a separate later phase; nothing here touches the core.
 package subs
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -28,19 +29,15 @@ type Error struct {
 }
 
 func (e *Error) Error() string { return e.Message }
-
 func errValidation(msg string) *Error {
 	return &Error{Status: 400, Code: "validation", Message: msg}
 }
-
 func errNotFound(what string) *Error {
 	return &Error{Status: 404, Code: what + "_not_found", Message: what + " not found"}
 }
-
 func errConflict(code, msg string) *Error {
 	return &Error{Status: 409, Code: code, Message: msg}
 }
-
 func nameConflictErr(err error, table string) error {
 	msg := err.Error()
 	if strings.Contains(msg, table+".name") || strings.Contains(msg, "idx_"+table+"_name") {
@@ -54,9 +51,7 @@ type Service struct {
 }
 
 func NewService(st *store.Store) *Service { return &Service{st: st} }
-
-func nowUnix() int64 { return time.Now().Unix() }
-
+func nowUnix() int64                      { return time.Now().Unix() }
 func validateName(name string) (string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" || len([]rune(name)) > 64 {
@@ -66,51 +61,6 @@ func validateName(name string) (string, error) {
 }
 
 // --- subscriptions ------------------------------------------------------------
-
-type SubscriptionView struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	UUID         string `json:"uuid"`
-	Token        string `json:"token"`
-	TemplateID   int64  `json:"templateId"`
-	TemplateName string `json:"templateName"`
-	LimitBytes   int64  `json:"limitBytes"`
-	UsedUp       int64  `json:"usedUp"`
-	UsedDown     int64  `json:"usedDown"`
-	UsedBytes    int64  `json:"usedBytes"`
-	ExpireAt     int64  `json:"expireAt"`
-	MaxIPs       int    `json:"maxIps"`
-	Enabled      bool   `json:"enabled"`
-	Status       string `json:"status"` // active | disabled | expired | over_quota
-	CreatedAt    int64  `json:"createdAt"`
-	UpdatedAt    int64  `json:"updatedAt"`
-}
-
-func statusOf(r store.SubscriptionRow, now int64) string {
-	switch {
-	case !r.Enabled:
-		return "disabled"
-	case r.ExpireAt > 0 && r.ExpireAt < now:
-		return "expired"
-	case r.LimitBytes > 0 && r.UsedUp+r.UsedDown >= r.LimitBytes:
-		return "over_quota"
-	default:
-		return "active"
-	}
-}
-
-func subscriptionView(r store.SubscriptionRow, templateName string, now int64) SubscriptionView {
-	return SubscriptionView{
-		ID: r.ID, Name: r.Name, UUID: r.UUID, Token: r.Token,
-		TemplateID: r.TemplateID, TemplateName: templateName,
-		LimitBytes: r.LimitBytes, UsedUp: r.UsedUp, UsedDown: r.UsedDown,
-		UsedBytes: r.UsedUp + r.UsedDown,
-		ExpireAt:  r.ExpireAt, MaxIPs: r.MaxIPs, Enabled: r.Enabled,
-		Status:    statusOf(r, now),
-		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
-	}
-}
-
 type SubscriptionRequest struct {
 	Name       string `json:"name"`
 	TemplateID int64  `json:"templateId"`
@@ -141,7 +91,6 @@ func (s *Service) validateSubscriptionFields(ctx context.Context, req Subscripti
 	}
 	return name, nil
 }
-
 func (s *Service) ListSubscriptions(ctx context.Context) ([]SubscriptionView, error) {
 	rows, err := s.st.ListSubscriptions(ctx)
 	if err != nil {
@@ -166,11 +115,18 @@ func (s *Service) ListSubscriptions(ctx context.Context) ([]SubscriptionView, er
 // OnlineIPResult is the online-IP snapshot: per-subscription distinct-IP
 // counts and the panel-wide distinct-IP total (one IP using several
 // subscriptions counts once in the total).
+// OnlineIPResult is the online-IP snapshot: per-subscription distinct-IP
+// counts and the panel-wide distinct-IP total (one IP using several
+// subscriptions counts once in the total).
 type OnlineIPResult struct {
 	Counts map[int64]int `json:"counts"`
 	Total  int           `json:"total"`
 }
 
+// OnlineIPCounts counts distinct source IPs per subscription from
+// connection log rows. The window is a fixed 30s: long enough to smooth
+// bursty traffic, short enough to still mean "online". The display
+// refresh rate itself follows the dashboard interval setting.
 // OnlineIPCounts counts distinct source IPs per subscription from
 // connection log rows. The window is a fixed 30s: long enough to smooth
 // bursty traffic, short enough to still mean "online". The display
@@ -185,10 +141,42 @@ func (s *Service) OnlineIPCounts(ctx context.Context) (OnlineIPResult, error) {
 	if err != nil {
 		return OnlineIPResult{}, err
 	}
+	// Core usernames for password protocols are renamed per
+	// (subscription, inbound) in coresync generation, so a
+	// subscription's IPs are the union over its plain name (vless)
+	// and its renamed names on its template's inbounds. This is
+	// computed from the stored template/inbound rows, never by
+	// parsing a core username, so hyphenated names cannot mislead
+	// it. Any load failure falls back to plain-name attribution.
+	inboundByID := map[int64]store.InboundRow{}
+	if inbounds, err := s.st.ListInbounds(ctx); err == nil {
+		for _, ib := range inbounds {
+			inboundByID[ib.ID] = ib
+		}
+	}
+	templateInboundIDs := map[int64][]int64{}
+	if templates, err := s.st.ListTemplates(ctx); err == nil {
+		for _, t := range templates {
+			var ids []int64
+			if err := json.Unmarshal([]byte(t.InboundIDs), &ids); err == nil {
+				templateInboundIDs[t.ID] = ids
+			}
+		}
+	}
 	res := OnlineIPResult{Counts: map[int64]int{}}
 	union := map[string]struct{}{}
 	for _, r := range rows {
-		ips := sets[r.Name]
+		ips := map[string]struct{}{}
+		for ip := range sets[r.Name] {
+			ips[ip] = struct{}{}
+		}
+		for _, ibID := range templateInboundIDs[r.TemplateID] {
+			if ib, ok := inboundByID[ibID]; ok {
+				for ip := range sets[r.Name+"-"+ib.Name] {
+					ips[ip] = struct{}{}
+				}
+			}
+		}
 		res.Counts[r.ID] = len(ips)
 		for ip := range ips {
 			union[ip] = struct{}{}
@@ -197,7 +185,6 @@ func (s *Service) OnlineIPCounts(ctx context.Context) (OnlineIPResult, error) {
 	res.Total = len(union)
 	return res, nil
 }
-
 func (s *Service) viewByID(ctx context.Context, id int64) (SubscriptionView, error) {
 	row, err := s.st.GetSubscription(ctx, id)
 	if err != nil {
@@ -212,15 +199,6 @@ func (s *Service) viewByID(ctx context.Context, id int64) (SubscriptionView, err
 	}
 	return subscriptionView(*row, tplName, nowUnix()), nil
 }
-
-func newToken() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return ""
-	}
-	return hex.EncodeToString(b)
-}
-
 func (s *Service) CreateSubscription(ctx context.Context, req SubscriptionRequest) (SubscriptionView, error) {
 	name, err := s.validateSubscriptionFields(ctx, req)
 	if err != nil {
@@ -241,41 +219,6 @@ func (s *Service) CreateSubscription(ctx context.Context, req SubscriptionReques
 
 // humanBytes renders a byte cap the way the panel talks about it
 // (decimal units, 1TB = 10^12); 0 means unlimited.
-func humanBytes(b int64) string {
-	if b <= 0 {
-		return "不限量"
-	}
-	units := []struct {
-		name string
-		div  int64
-	}{
-		{"TB", 1000000000000},
-		{"GB", 1000000000},
-		{"MB", 1000000},
-		{"KB", 1000},
-	}
-	for _, u := range units {
-		if b >= u.div {
-			v := float64(b) / float64(u.div)
-			if v == float64(int64(v)) {
-				return strconv.FormatInt(int64(v), 10) + u.name
-			}
-			return strconv.FormatFloat(v, 'f', 1, 64) + u.name
-		}
-	}
-	return strconv.FormatInt(b, 10) + "B"
-}
-
-// formatExpire renders an expiry instant as a date. ExpireAt is stored
-// as end-of-day in the panel timezone, so the UTC date matches the
-// panel date for timezones east of UTC.
-func formatExpire(ts int64) string {
-	if ts <= 0 {
-		return "永不过期"
-	}
-	return time.Unix(ts, 0).UTC().Format("2006-01-02")
-}
-
 func (s *Service) UpdateSubscription(ctx context.Context, id int64, req SubscriptionRequest) (SubscriptionView, string, error) {
 	old, err := s.viewByID(ctx, id)
 	if err != nil {
@@ -314,7 +257,6 @@ func (s *Service) UpdateSubscription(ctx context.Context, id int64, req Subscrip
 	v, err := s.viewByID(ctx, id)
 	return v, strings.Join(parts, "；"), err
 }
-
 func (s *Service) DeleteSubscription(ctx context.Context, id int64) error {
 	if _, err := s.st.GetSubscription(ctx, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -357,6 +299,9 @@ func (s *Service) SetSubscriptionEnabled(ctx context.Context, id int64, enabled 
 
 // ResetSubscriptionToken rotates the token; the old subscription link
 // stops working as soon as distribution serves the new one.
+
+// ResetSubscriptionToken rotates the token; the old subscription link
+// stops working as soon as distribution serves the new one.
 func (s *Service) ResetSubscriptionToken(ctx context.Context, id int64) (SubscriptionView, error) {
 	if _, err := s.st.GetSubscription(ctx, id); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -369,6 +314,10 @@ func (s *Service) ResetSubscriptionToken(ctx context.Context, id int64) (Subscri
 	}
 	return s.viewByID(ctx, id)
 }
+
+// ResetSubscriptionUUID rotates the core user identity （转换UUID in the
+// old panel). Existing client configs carry the old uuid and stop
+// working once the new identity is synced to the core.
 
 // ResetSubscriptionUUID rotates the core user identity （转换UUID in the
 // old panel). Existing client configs carry the old uuid and stop

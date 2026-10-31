@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // SyncLogRow is one sync-engine attempt. (An archived-versions table
@@ -26,6 +27,23 @@ func (s *Store) AddSyncLog(ctx context.Context, r SyncLogRow) (int64, error) {
 		return 0, fmt.Errorf("store: add sync log: %w", err)
 	}
 	return res.LastInsertId()
+}
+
+// SyncLogRetention mirrors core_logs (90 days) but in Unix seconds:
+// sync `at` is seconds (coresync nowUnix), while core `ts` is milliseconds.
+const SyncLogRetention = 90 * 24 * time.Hour
+
+// PruneSyncLogs deletes sync rows and their change rows older than the
+// retention window. Each table is pruned by its own `at`; change rows
+// are NOT cascade-deleted (sync_log_id has no FK), so both tables are
+// deleted explicitly. The deletes are idempotent, so a crash between
+// them is completed by the next prune run.
+func (s *Store) PruneSyncLogs(ctx context.Context, beforeTs int64) error {
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM config_change_logs WHERE at < ?`, beforeTs); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sync_logs WHERE at < ?`, beforeTs)
+	return err
 }
 
 func (s *Store) ListSyncLogs(ctx context.Context, limit int) ([]SyncLogRow, error) {

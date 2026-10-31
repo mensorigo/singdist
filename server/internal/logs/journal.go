@@ -25,7 +25,7 @@ var singBoxLine = regexp.MustCompile(
 // prepends to connection log lines; the id itself groups one
 // connection's lines (from / to / outbound) into a single record.
 var connIDPrefix = regexp.MustCompile(`^\[[^\]]+\]\s*`)
-var connIDToken = regexp.MustCompile(`^\[(\d+) \d+ms\]`)
+var connIDToken = regexp.MustCompile(`^\[(\d+) [^\]]+\]`)
 
 // Connection lines are the core's per-connection records; everything
 // else is a core system event.

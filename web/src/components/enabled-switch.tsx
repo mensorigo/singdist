@@ -22,7 +22,13 @@ export function EnabledSwitch({
       onClick={onToggle}
       className={cn(
         "relative h-5 w-9 shrink-0 rounded-full transition-colors duration-200 disabled:opacity-50",
-        enabled ? "bg-primary" : "bg-muted-foreground/30",
+        // Dark mode needs its own track colors: dark --primary is
+        // near-white, so the old bg-primary on-state rendered white
+        // track + white thumb (indistinguishable, glaring). Light
+        // mode classes are untouched.
+        enabled
+          ? "bg-primary dark:bg-emerald-600"
+          : "bg-muted-foreground/30 dark:bg-zinc-700",
       )}
     >
       <span
