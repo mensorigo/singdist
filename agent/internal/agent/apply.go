@@ -134,6 +134,13 @@ func (e *Engine) Apply(ctx context.Context, doc, beforeDoc []byte) *applyError {
 	if err := os.Rename(tmpPath, e.Target); err != nil {
 		return &applyError{result: "error", err: fmt.Errorf("swap config: %w", err)}
 	}
+	// The temp file was created 0600 by os.CreateTemp, but the
+	// core runs as the unprivileged sing-box user and must be able
+	// to read its own config. Without this the core fails with
+	// "read config: permission denied" and restart-loops.
+	if err := os.Chmod(e.Target, 0o644); err != nil {
+		return &applyError{result: "error", err: fmt.Errorf("chmod config: %w", err)}
+	}
 	if e.Unit == "" {
 		return nil
 	}
@@ -188,6 +195,11 @@ func (e *Engine) writeAtomic(doc []byte) error {
 	}
 	if err := os.Rename(tmpPath, e.Target); err != nil {
 		return fmt.Errorf("swap config: %w", err)
+	}
+	// See Apply: the temp file is 0600, the core runs as the
+	// unprivileged sing-box user and must be able to read it.
+	if err := os.Chmod(e.Target, 0o644); err != nil {
+		return fmt.Errorf("chmod config: %w", err)
 	}
 	return nil
 }

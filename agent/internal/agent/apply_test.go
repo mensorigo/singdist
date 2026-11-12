@@ -97,6 +97,49 @@ func TestEngineNoRestartMode(t *testing.T) {
 	}
 }
 
+func TestEngineApplySetsConfigMode0644(t *testing.T) {
+	dir := t.TempDir()
+	e := &Engine{Target: filepath.Join(dir, "config.json"), Bin: "sing-box", Unit: "", Check: fakeChecker{}}
+	if err := e.Apply(context.Background(), []byte(`{"inbounds":[]}`), nil); err != nil {
+		t.Fatalf("write-only apply must succeed: %v", err)
+	}
+	// Regression: os.CreateTemp makes the temp file 0600, and the
+	// core runs as the unprivileged sing-box user. A 0600
+	// root-owned config makes the core fail with "read config:
+	// permission denied" and restart-loop (seen on 2号机, 170+
+	// restarts). The applied config must be readable by the core.
+	fi, err := os.Stat(e.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("applied config mode = %o, want 0644", fi.Mode().Perm())
+	}
+	b, _ := os.ReadFile(e.Target)
+	if string(b) != `{"inbounds":[]}` {
+		t.Fatalf("applied config content wrong, got %s", b)
+	}
+}
+
+func TestEngineWriteAtomicSetsConfigMode0644(t *testing.T) {
+	dir := t.TempDir()
+	e := testEngine(t, dir, &fakeRestarter{}, &fakeProber{state: "active"})
+	if err := e.writeAtomic([]byte(`{"old":true}`)); err != nil {
+		t.Fatalf("writeAtomic must succeed: %v", err)
+	}
+	fi, err := os.Stat(e.Target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o644 {
+		t.Fatalf("writeAtomic config mode = %o, want 0644", fi.Mode().Perm())
+	}
+	b, _ := os.ReadFile(e.Target)
+	if string(b) != `{"old":true}` {
+		t.Fatalf("writeAtomic config content wrong, got %s", b)
+	}
+}
+
 func TestEngineCheckFailedKeepsOldFile(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "config.json")
